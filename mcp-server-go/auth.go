@@ -96,6 +96,12 @@ var toolPermissions = map[string]Role{
 	"node_list":      RoleViewer,
 	"node_get":       RoleViewer,
 	"deploy_to_node": RoleOperator,
+	// Scaling — admin to create/remove, operator to scale
+	"service_create": RoleAdmin,
+	"service_remove": RoleAdmin,
+	"scale_set":      RoleOperator,
+	"service_list":   RoleViewer,
+	"service_get":    RoleViewer,
 	// Health checks — operator to configure/remove, viewer to list/status
 	"health_check_set":    RoleOperator,
 	"health_check_remove": RoleOperator,

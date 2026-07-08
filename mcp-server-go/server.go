@@ -91,6 +91,9 @@ func main() {
 	// Multi-node registry — cluster catalog of physical machines
 	nodeRegistry = newNodeRegistry()
 
+	// Scaling manager — replica groups + load balancing
+	scaleMgr = newScaleManager(client)
+
 	// Secrets manager (optional — degrades gracefully if key unavailable)
 	sm, err := newSecretsManager()
 	if err != nil {
@@ -426,6 +429,27 @@ func registerAllTools(s *server.MCPServer) {
 		mcp.WithNumber("memory_mb", mcp.Description("Memory limit in MB (default 512)")),
 		mcp.WithNumber("cpu_count", mcp.Description("CPU cores (default 1.0)")),
 	), handleDeployToNode)
+
+	// --- Horizontal scaling (5) ---
+	s.AddTool(toolWithArgs("service_create", "Define a new scalable service (group of replica containers). Does NOT create replicas yet — use scale_set to add them. Args: name (required), template_id (required), port (internal port, default 8000), memory_mb (default 256), cpu_count (default 1.0), domain (optional — enables load-balanced routing).",
+		mcp.WithString("name", mcp.Required(), mcp.Description("Unique service name")),
+		mcp.WithString("template_id", mcp.Required()),
+		mcp.WithNumber("port", mcp.Description("Internal container port (default 8000)")),
+		mcp.WithNumber("memory_mb", mcp.Description("Memory per replica in MB (default 256)")),
+		mcp.WithNumber("cpu_count", mcp.Description("CPU cores per replica (default 1.0)")),
+		mcp.WithString("domain", mcp.Description("Optional domain for load-balanced routing")),
+	), handleServiceCreate)
+	s.AddTool(toolWithArgs("scale_set", "Set the exact number of replicas for a service. Creates or removes containers to match the desired count. If the service has a domain, the load balancer is updated automatically.",
+		mcp.WithString("name", mcp.Required()),
+		mcp.WithNumber("replicas", mcp.Required(), mcp.Description("Desired replica count (0-20)")),
+	), handleScaleSet)
+	s.AddTool(tool("service_list", "List all scalable services with current replica counts and container IDs."), handleServiceList)
+	s.AddTool(toolWithArgs("service_get", "Get detailed information about a scalable service.",
+		mcp.WithString("name", mcp.Required()),
+	), handleServiceGet)
+	s.AddTool(toolWithArgs("service_remove", "Remove a service definition. Containers are NOT killed automatically.",
+		mcp.WithString("name", mcp.Required()),
+	), handleServiceRemove)
 
 	// --- High availability (1) ---
 	s.AddTool(tool("ha_state", "Get the current high-availability state of this CubeMaster node: role (active/standby), active node ID, peer health, and failover timing."), handleHAState)
