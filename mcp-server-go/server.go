@@ -25,6 +25,7 @@ var (
 	backupMgr       *BackupManager
 	metricsCollector *MetricsCollector
 	routeMgr        *RouteManager
+	netMgr          *NetworkManager
 	version         = "1.0.0"
 )
 
@@ -81,6 +82,7 @@ func main() {
 	metricsCollector = newMetricsCollector()
 	routeMgr = newRouteManager()
 	versionMgr = newVersionManager(deploy)
+	netMgr = newNetworkManager()
 
 	s := server.NewMCPServer(
 		"cube-container-mcp",
@@ -288,6 +290,40 @@ func registerAllTools(s *server.MCPServer) {
 		mcp.WithString("domain", mcp.Required()),
 	), handleDeleteRoute)
 	s.AddTool(tool("list_routes", "List all configured domain routes with TLS status."), handleListRoutes)
+
+	// --- Networking (9) ---
+	s.AddTool(toolWithArgs("add_port_mapping", "Map a host port to a container port. Allows external access to a container service.",
+		mcp.WithString("container_id", mcp.Required()),
+		mcp.WithNumber("host_port", mcp.Required()),
+		mcp.WithNumber("container_port", mcp.Required()),
+		mcp.WithString("protocol", mcp.Description("tcp or udp (default tcp)")),
+		mcp.WithString("host_ip", mcp.Description("Bind IP (default 0.0.0.0)")),
+	), handleAddPortMapping)
+	s.AddTool(toolWithArgs("remove_port_mapping", "Remove a port mapping by ID.",
+		mcp.WithString("mapping_id", mcp.Required()),
+	), handleRemovePortMapping)
+	s.AddTool(tool("list_port_mappings", "List all port mappings."), handleListPortMappings)
+	s.AddTool(toolWithArgs("add_dns_alias", "Add a DNS alias pointing to a container. Creates /etc/hosts entry.",
+		mcp.WithString("alias", mcp.Required(), mcp.Description("FQDN e.g. myapp.cube.local")),
+		mcp.WithString("container_id", mcp.Required()),
+		mcp.WithString("target", mcp.Required(), mcp.Description("Container IP address")),
+	), handleAddDNSAlias)
+	s.AddTool(toolWithArgs("remove_dns_alias", "Remove a DNS alias.",
+		mcp.WithString("alias", mcp.Required()),
+	), handleRemoveDNSAlias)
+	s.AddTool(tool("list_dns_aliases", "List all DNS aliases."), handleListDNSAliases)
+	s.AddTool(toolWithArgs("add_network_policy", "Add a network policy (allow/deny) between containers.",
+		mcp.WithString("name", mcp.Required()),
+		mcp.WithString("source_container", mcp.Description("Source container ID")),
+		mcp.WithString("dest_container", mcp.Description("Destination container ID")),
+		mcp.WithString("action", mcp.Required(), mcp.Description("allow or deny")),
+		mcp.WithString("protocol", mcp.Description("tcp or udp (default tcp)")),
+		mcp.WithNumber("port", mcp.Description("Port number (0 = all)")),
+	), handleAddNetworkPolicy)
+	s.AddTool(tool("list_network_policies", "List all network policies."), handleListNetworkPolicies)
+	s.AddTool(toolWithArgs("remove_network_policy", "Remove a network policy by ID.",
+		mcp.WithString("policy_id", mcp.Required()),
+	), handleRemoveNetworkPolicy)
 }
 
 // ---- Tool builders ----

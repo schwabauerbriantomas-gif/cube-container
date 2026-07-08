@@ -73,6 +73,16 @@ var toolPermissions = map[string]Role{
 	"create_route": RoleAdmin,
 	"delete_route": RoleAdmin,
 	"list_routes":  RoleViewer,
+	// Networking — admin to mutate, viewer to list
+	"add_port_mapping":      RoleOperator,
+	"remove_port_mapping":   RoleAdmin,
+	"list_port_mappings":    RoleViewer,
+	"add_dns_alias":         RoleOperator,
+	"remove_dns_alias":      RoleAdmin,
+	"list_dns_aliases":      RoleViewer,
+	"add_network_policy":    RoleAdmin,
+	"list_network_policies": RoleViewer,
+	"remove_network_policy": RoleAdmin,
 }
 
 // roleLevel returns a numeric level for comparison (higher = more permissions).

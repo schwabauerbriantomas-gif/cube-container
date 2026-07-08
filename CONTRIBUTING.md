@@ -1,161 +1,134 @@
-# Contributing to Cube Sandbox
+# Contributing to Cube Container
 
-Thank you for your interest in contributing to Cube Sandbox! This document provides guidelines and information to help you get started.
+Cube Container is a container-mode fork of [CubeSandbox](https://github.com/TencentCloud/CubeSandbox), focused on MCP-native container orchestration for edge nodes.
 
-## Ways to Contribute
-
-- **Report bugs** — Open a [GitHub Issue](https://github.com/tencentcloud/CubeSandbox/issues) with steps to reproduce.
-- **Request features** — Describe your use case and proposed solution in an Issue.
-- **Improve documentation** — Fix typos, clarify explanations, or add examples.
-- **Submit code** — Fix bugs, implement features, or improve performance.
-
-## Community Docs Channels
-
-Besides general documentation fixes, we maintain three community doc channels under `docs/guide/`:
-
-- **Troubleshooting** — deployment and operations write-ups in [`docs/guide/troubleshooting/`](./docs/guide/troubleshooting/index.md) and [`docs/zh/guide/troubleshooting/`](./docs/zh/guide/troubleshooting/index.md)
-- **Use Cases** — real-world business or production case studies in [`docs/guide/usecases/`](./docs/guide/usecases/index.md) and [`docs/zh/guide/usecases/`](./docs/zh/guide/usecases/index.md)
-- **Integrations** — one integration guide per framework or agent in [`docs/guide/integrations/`](./docs/guide/integrations/index.md) and [`docs/zh/guide/integrations/`](./docs/zh/guide/integrations/index.md)
-
-### ⛺️ Requirements for Community Doc PRs
-
-- **Choose one language** — every new or updated article must include either `docs/guide/<channel>/<slug>.md` or `docs/zh/guide/<channel>/<slug>.md`.
-- **If you want to provide both languages**:
-  - **Use the same filename in both languages** — filenames must use English kebab-case, for example `langchain.md` or `e2b-api-401-timeout.md`.
-  - **Keep frontmatter aligned** — both language versions should use the same frontmatter keys (`title`, `author`, `date`, `tags`, `lang`).
-
-- **Start from the provided template** — each channel includes an `_template.md` file plus an index page with the current article list and instructions.
-
-## Getting Started
-
-### Prerequisites
-
-- Linux with KVM support (x86_64)
-- Docker
-- Go 1.21+
-- Rust 1.75+ (with `x86_64-unknown-linux-musl` target)
-- protoc (Protocol Buffers compiler)
-
-### Build Environment
-
-Cube Sandbox provides a Docker-based builder image for a consistent build environment:
+## Quick Start
 
 ```bash
-# Build the builder image
-make builder-image
+# Clone
+git clone https://github.com/schwabauerbriantomas-gif/cube-container.git
+cd cube-container/mcp-server-go
 
-# Start an interactive shell inside the builder
-make builder-shell
+# Build
+go build -o cube-mcp .
 
-# Build all Go components (CubeMaster, Cubelet, network-agent)
-make all
+# Run tests
+go test -v ./...
 
-# Build individual components
-make cubemaster
-make cubelet
-make agent
-make shim
+# Run e2e + benchmarks
+go test -tags=e2e -v ./...
+
+# Run with race detector
+go test -race -v ./...
 ```
 
-See the [Makefile](./Makefile) for the full list of build targets.
-
-### Project Structure
-
-| Directory | Language | Description |
-|---|---|---|
-| `CubeAPI/` | Rust | E2B-compatible REST API gateway |
-| `CubeMaster/` | Go | Orchestration scheduler and cluster management |
-| `Cubelet/` | Go | Per-node sandbox lifecycle agent |
-| `CubeProxy/` | Go | Reverse proxy for sandbox request routing |
-| `CubeShim/` | Rust | containerd shim bridging to KVM MicroVM |
-| `agent/` | Rust | In-guest daemon running inside each sandbox |
-| `hypervisor/` | Rust | KVM-based MicroVM manager (Cloud Hypervisor fork) |
-| `mvs/` / `CubeNet/` | Go | CubeVS eBPF-based network isolation |
-| `network-agent/` | Go | Network management service |
-| `deploy/` | Shell | Deployment scripts and guest image tooling |
-| `examples/` | Python | SDK examples and end-to-end scenarios |
-| `docs/` | Markdown | VitePress documentation site (EN + ZH) |
-
-## Submitting a Pull Request
-
-1. **Fork** the repository and create a feature branch from `main`.
-2. **Make your changes** — keep commits focused and atomic.
-3. **Test** — make sure existing tests and linters still pass.
-4. **Add tests** — add focused test coverage when behavior changes.
-5. **Document** — update relevant docs if your change affects user-facing behavior.
-6. **Open the PR** — describe the motivation and what the change does. Link related Issues.
-
-### Commit Organization
-
-Commits should be logically organized and self-contained:
-
-- **One component per commit** — if a change spans multiple components (e.g., `CubeAPI` and `Cubelet`), split it into separate commits for each component.
-- **Keep commits atomic** — each commit should represent a single, coherent change that can be understood and reviewed independently.
-- **Separate refactoring from behavior changes** — do not mix code cleanup or refactoring with functional changes in the same commit.
-- **Order commits logically** — when a PR contains multiple commits, arrange them so that each commit builds on the previous one (e.g., infrastructure changes first, then the feature that depends on them).
-
-### Commit Messages
-
-Write clear commit messages that explain *why* the change was made:
+## Architecture
 
 ```
-component: short summary of the change
-
-Longer description explaining the motivation, trade-offs, or context.
-Closes #123
-
-Signed-off-by: Your Name <your.email@example.com>
+MCP Server (Go, single binary)
+├── server.go      — 34 MCP tools, dual-mode (stdio + HTTP)
+├── client.go      — CubeAPI HTTP client (default backend)
+├── docker_client.go — Docker Engine backend (optional, build tag: docker)
+├── auth.go        — API keys, RBAC, rate limiting, audit trail
+├── deploy.go      — GitOps deploy, volume management
+├── backup.go      — Backup/restore with SHA256 integrity
+├── scheduler.go   — Bin-packing node scheduling assistant
+├── routing.go     — Caddy TLS automation
+├── logstream.go   — SSE log streaming
+├── metrics.go     — Prometheus endpoint
+├── rollback.go    — Deploy versioning
+├── webhook.go     — GitOps push webhooks
+└── security.go    — Input validation
 ```
 
-Prefix the summary with the component name (e.g., `cubeapi:`, `cubelet:`, `docs:`, `shim:`).
+## Adding a New MCP Tool
 
-### Developer Certificate of Origin (DCO)
+1. **Define the handler** in the appropriate `.go` file:
 
-All commits **must** include a `Signed-off-by` line to certify the [Developer Certificate of Origin (DCO)](https://developercertificate.org/). This indicates that you have the right to submit the contribution under the project's license.
+```go
+func handleMyTool(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+    args := parseArgs(req)
+    name := argString(args, "name")
+    if name == "" {
+        return errResult("name is required"), nil
+    }
+    // ... do work ...
+    return okResult(data), nil
+}
+```
 
-Add it by using the `-s` flag when committing:
+2. **Register it** in `server.go` → `registerAllTools`:
+
+```go
+s.AddTool(toolWithArgs("my_tool", "Description here.",
+    mcp.WithString("name", mcp.Required()),
+), handleMyTool)
+```
+
+3. **Add RBAC permission** in `auth.go` → `toolPermissions`:
+
+```go
+"my_tool": RoleOperator, // viewer, operator, or admin
+```
+
+4. **Write tests** in a `_test.go` file.
+
+5. **Verify**: `go build . && go test -v ./...`
+
+## RBAC Roles
+
+| Role | Level | Can do |
+|------|-------|--------|
+| viewer | 1 | Read-only: list, get, health, logs, metrics |
+| operator | 2 | Deploy, create, kill, pause, resume, exec, volumes, backups |
+| admin | 3 | Everything: delete, rollback, routing, restore |
+
+## Testing
+
+| Test type | Command | What it covers |
+|-----------|---------|----------------|
+| Unit | `go test -v ./...` | Security, auth, RBAC, backup, rate limit |
+| E2E | `go test -tags=e2e -v ./...` | Full HTTP stack against mock CubeAPI |
+| Concurrency | `go test -race -v ./...` | Race detector on all tests |
+| Benchmarks | `go test -tags=e2e -bench=. -benchmem` | Performance metrics |
+
+## Commit Messages
+
+Follow conventional commits:
+
+```
+feat: add new MCP tool for X
+fix: resolve race condition in audit logger
+docs: update README with performance numbers
+refactor: extract backend interface
+test: add concurrency stress tests
+```
+
+AI-assisted commits must include:
+```
+Assisted-by: AgentName:ModelVersion
+```
+
+## Code Style
+
+- Match existing patterns — look at neighboring functions
+- `gofmt` is mandatory: `gofmt -w *.go`
+- No external dependencies unless absolutely necessary (we're stdlib-first)
+- Errors are returned, not panicked
+- All public-facing strings should be descriptive (they reach the AI agent)
+
+## Docker Backend (Optional)
+
+The Docker backend is behind a build tag:
 
 ```bash
-git commit -s -m "component: your commit message"
+# Build with Docker support
+go build -tags docker -o cube-mcp .
+
+# The binary auto-detects: if /var/run/docker.sock exists, use Docker;
+# otherwise fall back to CubeAPI
 ```
-
-Or manually append the following line to your commit message:
-
-```
-Signed-off-by: Your Name <your.email@example.com>
-```
-
-Commits without a valid `Signed-off-by` line will not be accepted.
-
-### Code Style
-
-- **Go** — follow standard `gofmt` formatting and project conventions.
-- **Rust** — follow `rustfmt` and `clippy` recommendations.
-- **Documentation** — use clear, concise language. Both English and Chinese docs should be kept in sync.
-
-## Issue & PR Close Policy
-
-Issues and PRs are closed under the following conditions:
-
-- **Stale after a `need-info` request** — if a maintainer asks for more information or requested changes and the author does not respond **for more than 2 weeks**, the Issue/PR is closed as stale. It can be reopened once the requested information or changes are provided.
-- **Resolved or superseded** — the underlying bug is fixed, the feature is implemented, or the change has been superseded by another PR/approach.
-- **Out of scope / won't fix** — closed with a comment explaining why.
-- **Duplicate** — closed with a link to the original Issue/PR.
-
-## Reporting Security Issues
-
-If you discover a security vulnerability, please report it responsibly via [GitHub Security Advisories](https://github.com/tencentcloud/CubeSandbox/security/advisories) rather than opening a public Issue.
 
 ## License
 
-By contributing to Cube Sandbox, you agree that your contributions will be licensed under the [Apache License 2.0](./LICENSE).
-
-
-## AI-Generated Code Policy
-
-AI agents MUST NOT add Signed-off-by tags. Only humans can legally certify the Developer Certificate of Origin (DCO). The human submitter is responsible for:
-
-- Reviewing all AI-generated code
-- Ensuring compliance with licensing requirements
-- Adding their own Signed-off-by tag to certify the DCO
-- Taking full responsibility for the contribution
+Apache 2.0 (inherited from upstream CubeSandbox).
