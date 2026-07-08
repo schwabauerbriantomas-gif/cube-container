@@ -73,6 +73,7 @@ var toolPermissions = map[string]Role{
 	"create_route": RoleAdmin,
 	"delete_route": RoleAdmin,
 	"list_routes":  RoleViewer,
+	"reload_routes": RoleAdmin,
 	// Networking — admin to mutate, viewer to list
 	"add_port_mapping":      RoleOperator,
 	"remove_port_mapping":   RoleAdmin,
@@ -85,6 +86,13 @@ var toolPermissions = map[string]Role{
 	"remove_network_policy": RoleAdmin,
 	// Backend introspection — informational, safe for all roles
 	"backend_info": RoleViewer,
+	// High availability — read-only state
+	"ha_state": RoleViewer,
+	// Secrets management — admin to mutate, operator to read, viewer to list
+	"secret_set":    RoleAdmin,
+	"secret_get":    RoleOperator,
+	"secret_list":   RoleViewer,
+	"secret_delete": RoleAdmin,
 }
 
 // roleLevel returns a numeric level for comparison (higher = more permissions).

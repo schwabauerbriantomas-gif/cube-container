@@ -1,0 +1,514 @@
+// Package main: CubeMaster high-availability — active-passive failover (design decision D6).
+//
+// We deliberately avoid Raft consensus to keep the RAM/CPU footprint low on
+// 4 GB edge nodes. Instead we use simple active-passive replication:
+//
+//   - Exactly one CubeMaster is "active" at a time and serves all MCP requests.
+//   - One or more "standby" nodes listen for heartbeats from the active node.
+//   - The active node POSTs a heartbeat to each peer every heartbeatInterval.
+//   - If a standby sees no heartbeat for failoverTimeout (5 missed beats), it
+//     promotes itself to active.
+//   - Split-brain mitigation is best-effort and lexicographic: if two nodes
+//     both believe they are active, the one with the lower ID demotes itself.
+//
+// This file is self-contained (standard library only). The HAManager is wired
+// into server.go (goroutine launch + mux registration) and auth.go (RBAC entry
+// for the ha_state tool) by the parent agent.
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+)
+
+// haManager is the process-wide HA coordinator. It is assigned in server.go's
+// main() after construction and wired into the HTTP mux + MCP tool registry.
+// Declared here so ha.go compiles standalone; server.go assigns it (does not
+// redeclare).
+var haManager *HAManager
+
+// ---- Roles ----
+
+// HARole identifies a node's current HA responsibility.
+type HARole string
+
+const (
+	// RoleActive means this node owns the MCP request path.
+	RoleActive HARole = "active"
+	// RoleStandby means this node is ready to take over if the active dies.
+	RoleStandby HARole = "standby"
+	// RoleUnjoined means the node has not yet joined an HA cluster.
+	RoleUnjoined HARole = "unjoined"
+)
+
+// ---- Peer ----
+
+// HAPeer describes a known CubeMaster peer.
+type HAPeer struct {
+	ID       string    `json:"id"`
+	Address  string    `json:"address"` // host:port
+	LastSeen time.Time `json:"last_seen"`
+	Healthy  bool      `json:"healthy"`
+}
+
+// ---- Heartbeat wire format ----
+
+// heartbeatPayload is the body POSTed to /ha/heartbeat.
+type heartbeatPayload struct {
+	FromID    string `json:"from_id"`
+	Role      string `json:"role"`
+	Timestamp string `json:"timestamp"` // RFC3339
+}
+
+// ---- State snapshot for the MCP tool & GET /ha/state ----
+
+// HAPeerInfo is the public, JSON-friendly view of a peer.
+type HAPeerInfo struct {
+	ID       string `json:"id"`
+	Address  string `json:"address"`
+	LastSeen string `json:"last_seen"`
+	Healthy  bool   `json:"healthy"`
+}
+
+// HAState is the JSON response returned by the ha_state MCP tool and the
+// GET /ha/state HTTP endpoint.
+type HAState struct {
+	SelfID       string       `json:"self_id"`
+	Role         string       `json:"role"`
+	ActiveID     string       `json:"active_id"`
+	Peers        []HAPeerInfo `json:"peers"`
+	Uptime       string       `json:"uptime"`
+	HeartbeatAge string       `json:"heartbeat_age"` // time since last heartbeat from active
+}
+
+// ---- Manager ----
+
+// HAManager coordinates active-passive failover for the CubeMaster process.
+// All fields are guarded by mu unless noted. It is safe for concurrent use.
+type HAManager struct {
+	peers []HAPeer // known CubeMaster peers (excludes self)
+
+	selfID   string  // this node's unique ID
+	role     HARole  // RoleActive | RoleStandby | RoleUnjoined
+	activeID string  // ID of the currently active node
+
+	heartbeatInterval time.Duration // default 2s
+	failoverTimeout   time.Duration // default 10s (5 missed heartbeats)
+	lastHeartbeat     time.Time     // last heartbeat received from the active node
+	startedAt         time.Time     // process/HA start time, for uptime
+
+	mu sync.RWMutex
+}
+
+// newHAManager builds an HAManager from environment configuration.
+//
+//   - CUBE_HA_PEERS: comma-separated "host:port" list of peer CubeMasters.
+//   - CUBE_HA_SELF_ID: this node's ID (defaults to the hostname).
+//   - CUBE_HA_ROLE: "active" or "standby" (defaults to "active" when there
+//     are no peers, otherwise "standby").
+func newHAManager() *HAManager {
+	selfID := os.Getenv("CUBE_HA_SELF_ID")
+	if selfID == "" {
+		if host, err := os.Hostname(); err == nil && host != "" {
+			selfID = host
+		} else {
+			selfID = "cube-master"
+		}
+	}
+
+	// Parse peers from CUBE_HA_PEERS. Each entry is "host:port"; we do not
+	// know the peer's ID yet, so we use its address as a stand-in ID until a
+	// heartbeat arrives carrying the real from_id.
+	var peers []HAPeer
+	if raw := strings.TrimSpace(os.Getenv("CUBE_HA_PEERS")); raw != "" {
+		for _, addr := range strings.Split(raw, ",") {
+			addr = strings.TrimSpace(addr)
+			if addr == "" {
+				continue
+			}
+			peers = append(peers, HAPeer{
+				ID:      addr, // provisional; updated on first heartbeat
+				Address: addr,
+				Healthy: true,
+			})
+		}
+	}
+
+	// Determine initial role.
+	role := RoleUnjoined
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CUBE_HA_ROLE"))) {
+	case "active":
+		role = RoleActive
+	case "standby":
+		role = RoleStandby
+	default:
+		// No explicit role: become active if we're alone, standby otherwise.
+		if len(peers) == 0 {
+			role = RoleActive
+		} else {
+			role = RoleStandby
+		}
+	}
+
+	now := time.Now()
+	m := &HAManager{
+		peers:             peers,
+		selfID:            selfID,
+		role:              role,
+		heartbeatInterval: 2 * time.Second,
+		failoverTimeout:   10 * time.Second,
+		startedAt:         now,
+		lastHeartbeat:     now, // optimistic: don't immediately trip failover at boot
+	}
+
+	// If we start active, we are the active node.
+	if role == RoleActive {
+		m.activeID = selfID
+	}
+
+	return m
+}
+
+// ---- Lifecycle ----
+
+// Start launches the background goroutines that maintain HA state:
+//
+//   - sendHeartbeats: only runs when this node is active; broadcasts a
+//     heartbeat to every peer every heartbeatInterval.
+//   - watchFailover: only runs when this node is standby; promotes the node
+//     if the active has not been heard from within failoverTimeout.
+//
+// Both loops honor ctx cancellation for clean shutdown.
+func (m *HAManager) Start(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[ha] starting node=%s role=%s peers=%d\n",
+		m.selfID, m.role, len(m.peers))
+	go m.sendHeartbeats(ctx)
+	go m.watchFailover(ctx)
+}
+
+// ---- HTTP handlers ----
+
+// HandleHeartbeat handles POST /ha/heartbeat.
+// The body is a heartbeatPayload; receiving one resets the failover timer.
+func (m *HAManager) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if m == nil {
+		http.Error(w, "HA manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var hb heartbeatPayload
+	if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
+		http.Error(w, "invalid heartbeat body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if hb.FromID == "" {
+		http.Error(w, "missing from_id", http.StatusBadRequest)
+		return
+	}
+
+	m.mu.Lock()
+	// Record the heartbeat from the active node.
+	m.lastHeartbeat = time.Now()
+
+	// Track the sender as a peer (update LastSeen / healthiness).
+	ts := m.lastHeartbeat
+	found := false
+	for i := range m.peers {
+		if m.peers[i].ID == hb.FromID || m.peers[i].Address == hb.FromID {
+			m.peers[i].ID = hb.FromID
+			m.peers[i].LastSeen = ts
+			m.peers[i].Healthy = true
+			found = true
+			break
+		}
+	}
+	if !found {
+		m.peers = append(m.peers, HAPeer{
+			ID:       hb.FromID,
+			Address:  hb.FromID,
+			LastSeen: ts,
+			Healthy:  true,
+		})
+	}
+
+	// If the heartbeat announces an active node, record it.
+	if strings.EqualFold(hb.Role, string(RoleActive)) {
+		m.activeID = hb.FromID
+		// Split-brain mitigation: if WE also think we're active but the
+		// sender has a lexicographically higher ID, we demote.
+		if m.role == RoleActive && hb.FromID != m.selfID && hb.FromID > m.selfID {
+			m.role = RoleStandby
+			fmt.Fprintf(os.Stderr,
+				"[ha] split-brain resolved: demoting to standby (local=%s < peer=%s)\n",
+				m.selfID, hb.FromID)
+		}
+	}
+	m.mu.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// HandleHAGetState handles GET /ha/state.
+func (m *HAManager) HandleHAGetState(w http.ResponseWriter, r *http.Request) {
+	if m == nil {
+		http.Error(w, "HA manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(m.State())
+}
+
+// registerRoutes wires the HA HTTP endpoints onto the server's mux.
+func (m *HAManager) registerRoutes(mux *http.ServeMux) {
+	if m == nil || mux == nil {
+		return
+	}
+	mux.HandleFunc("/ha/heartbeat", m.HandleHeartbeat)
+	mux.HandleFunc("/ha/state", m.HandleHAGetState)
+}
+
+// ---- Role transitions ----
+
+// Promote transitions this node from standby to active. It is called
+// automatically by watchFailover when the active node is deemed dead.
+func (m *HAManager) Promote() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old := m.role
+	m.role = RoleActive
+	m.activeID = m.selfID
+	m.lastHeartbeat = time.Now() // reset so we don't immediately re-trip
+	fmt.Fprintf(os.Stderr, "[ha] promoted %s: %s -> active (was active=%s)\n",
+		m.selfID, old, m.activeID)
+}
+
+// Demote transitions this node to standby. It is used when a higher-priority
+// (lexicographically greater) node announces itself as active, resolving a
+// split-brain condition.
+func (m *HAManager) Demote() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old := m.role
+	m.role = RoleStandby
+	m.lastHeartbeat = time.Now() // reset failover timer; give the new active a chance
+	fmt.Fprintf(os.Stderr, "[ha] demoted %s: %s -> standby\n", m.selfID, old)
+}
+
+// ---- State & failover detection ----
+
+// State returns a point-in-time snapshot of the HA state, safe for the MCP
+// tool and the HTTP /ha/state endpoint.
+func (m *HAManager) State() HAState {
+	if m == nil {
+		return HAState{Role: string(RoleUnjoined)}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	peers := make([]HAPeerInfo, 0, len(m.peers))
+	for _, p := range m.peers {
+		lastSeen := ""
+		if !p.LastSeen.IsZero() {
+			lastSeen = p.LastSeen.Format(time.RFC3339)
+		}
+		peers = append(peers, HAPeerInfo{
+			ID:       p.ID,
+			Address:  p.Address,
+			LastSeen: lastSeen,
+			Healthy:  p.Healthy,
+		})
+	}
+
+	hbAge := time.Since(m.lastHeartbeat)
+	return HAState{
+		SelfID:       m.selfID,
+		Role:         string(m.role),
+		ActiveID:     m.activeID,
+		Peers:        peers,
+		Uptime:       time.Since(m.startedAt).Round(time.Second).String(),
+		HeartbeatAge: hbAge.Round(time.Millisecond).String(),
+	}
+}
+
+// CheckFailover reports whether the currently active node should be considered
+// dead — i.e. no heartbeat has been received within failoverTimeout. Only
+// meaningful for standby nodes; active nodes always see themselves as healthy.
+func (m *HAManager) CheckFailover() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.role != RoleStandby {
+		return false
+	}
+	return time.Since(m.lastHeartbeat) >= m.failoverTimeout
+}
+
+// ---- Background loops ----
+
+// sendHeartbeats runs on every node but only sends when this node is active.
+// Each tick POSTs a heartbeat to every known peer. Failed peers are marked
+// unhealthy so their state is reflected in /ha/state and the ha_state tool.
+func (m *HAManager) sendHeartbeats(ctx context.Context) {
+	ticker := time.NewTicker(m.heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		m.mu.RLock()
+		active := m.role == RoleActive
+		m.mu.RUnlock()
+		if !active {
+			continue
+		}
+
+		m.dispatchHeartbeats()
+	}
+}
+
+// dispatchHeartbeats sends one heartbeat POST to every peer and updates peer
+// health based on the outcome. It reads a snapshot of the peer list under the
+// lock, then performs network I/O outside the lock to avoid blocking readers.
+func (m *HAManager) dispatchHeartbeats() {
+	m.mu.RLock()
+	hb := heartbeatPayload{
+		FromID:    m.selfID,
+		Role:      string(m.role),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	addresses := make([]string, len(m.peers))
+	for i, p := range m.peers {
+		addresses[i] = p.Address
+	}
+	m.mu.RUnlock()
+
+	if len(addresses) == 0 {
+		return
+	}
+
+	body, _ := json.Marshal(hb)
+	client := &http.Client{Timeout: m.heartbeatInterval}
+
+	healthy := make(map[string]bool, len(addresses))
+	var wg sync.WaitGroup
+	var mu sync.Mutex // guards healthy
+
+	for _, addr := range addresses {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			url := fmt.Sprintf("http://%s/ha/heartbeat", addr)
+			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+			mu.Lock()
+			healthy[addr] = resp.StatusCode >= 200 && resp.StatusCode < 300
+			mu.Unlock()
+		}(addr)
+	}
+	wg.Wait()
+
+	// Apply health results.
+	m.mu.Lock()
+	now := time.Now()
+	for i := range m.peers {
+		if ok, hit := healthy[m.peers[i].Address]; hit {
+			m.peers[i].Healthy = ok
+			if ok {
+				m.peers[i].LastSeen = now
+			}
+		} else {
+			// No successful response — mark unhealthy if we never heard back.
+			m.peers[i].Healthy = false
+		}
+	}
+	m.mu.Unlock()
+}
+
+// watchFailover runs on every node. A standby node checks each tick whether
+// the active has gone silent for longer than failoverTimeout; if so, it
+// promotes itself. An active node does nothing here.
+func (m *HAManager) watchFailover(ctx context.Context) {
+	// Check more frequently than the failover window to detect death promptly.
+	checkEvery := m.heartbeatInterval
+	if checkEvery > time.Second {
+		checkEvery = time.Second
+	}
+	ticker := time.NewTicker(checkEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		if m.CheckFailover() {
+			fmt.Fprintf(os.Stderr,
+				"[ha] failover triggered: no heartbeat from active %s for %s; promoting self\n",
+				m.activeIDSnapshot(), m.failoverTimeout)
+			m.Promote()
+		}
+	}
+}
+
+// activeIDSnapshot returns the current activeID under the read lock.
+func (m *HAManager) activeIDSnapshot() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.activeID
+}
+
+// ---- MCP tool handler ----
+//
+// handleHAState is the MCP tool handler for "ha_state" (read-only, RoleViewer).
+// It returns the current HA state: this node's role, the active node ID, peer
+// health, and timing information. The tool is registered in server.go and the
+// permission is added to toolPermissions in auth.go by the parent agent.
+func handleHAState(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if haManager == nil {
+		return errResult("HA manager not initialized"), nil
+	}
+	return okResult(haManager.State()), nil
+}

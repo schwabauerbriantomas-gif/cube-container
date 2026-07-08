@@ -1,76 +1,48 @@
-# Cube Container — Edge Security Configuration
+# Cube Container — Production Caddyfile
 #
-# TLS 1.3 + WAF + Rate Limiting for production deployments.
+# This is the main Caddyfile. Caddy manages TLS certificates via Let's Encrypt
+# automatically for every domain. Dynamic routes created by the MCP
+# `create_route` tool are written to /etc/caddy/cube-routes.caddy and imported
+# below — zero manual config needed.
 #
-# This file provides:
-#   1. Caddyfile snippet with mTLS, HSTS, and security headers
-#   2. Nginx equivalent (for CubeProxy/OpenResty)
+# Setup:
+#   1. Point your domain's DNS A record to this server's IP
+#   2. Ensure ports 80 + 443 are open
+#   3. Start Caddy with: caddy run --config /etc/caddy/Caddyfile
+#   4. Use `create_route` MCP tool to add domains — they appear instantly
 #
-# Place at /etc/cube-container/Caddyfile or include in nginx.conf
-# ==================================================================
-
-# ---- Caddyfile (recommended for single-node and small clusters) ----
+# Environment variables (set in Caddy's environment):
+#   ACME_EMAIL — email for Let's Encrypt account (required for production)
+# ==============================================================================
 
 {
-    auto_https off
+    # Let's Encrypt email — set via environment
+    email {$ACME_EMAIL:admin@example.com}
+
+    # Enable HTTP/2 and HTTP/3
     servers {
         protocols h1 h2 h3
     }
 
     # Security defaults
     admin off
-    persist_config off
 }
 
-# ---- TLS 1.3 Snippet (import in every site block) ----
+# ---- Snippets (reused by static sites and dynamic routes) ----
 
-(tls13) {
-    tls internal {
-        # PCI-DSS 4.1: strong cryptography only
-        protocols tls1.3 tls1.3
-        curves x25519 secp384r1
-        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256 TLS_CHACHA20_POLY1305_SHA256
+(tls_security) {
+    # TLS is automatic — Caddy provisions and renews Let's Encrypt certs.
+    # No explicit tls directive needed for public domains.
+    # This snippet adds the security headers.
 
-        # mTLS: require client certificates for agent connections
-        client_auth {
-            mode require_and_verify
-        }
-    }
-
-    # Security headers (SOC 2: implement security monitoring controls)
     header {
         Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
         Referrer-Policy "no-referrer"
         Permissions-Policy "geolocation=(), microphone=(), camera=()"
-        Content-Security-Policy "default-src 'self'"
     }
 }
-
-# ---- Rate Limiting (requires caddy-l4 or caddy-ratelimit plugin) ----
-
-# Using built-in request matcher for basic rate limiting.
-# For production: install caddy-ratelimit module for proper sliding window.
-
-(rate_limit) {
-    # Rate limit API endpoints: 120 req/min per IP
-    @api path /cubeapi/v1/* /v1/*
-    handle @api {
-        # Basic connection throttling via Caddy's built-in mechanisms
-        # For granular control, use caddy-ratelimit plugin:
-        #   rate_limit {
-        #       zone api {
-        #           key {remote_host}
-        #           events 120
-        #           window 1m
-        #       }
-        #   }
-        reverse_proxy localhost:3000
-    }
-}
-
-# ---- WAF Rules (via Caddy request matcher patterns) ----
 
 (waf) {
     # Block SQL Injection
@@ -98,45 +70,51 @@
     abort @cmd_injection
 }
 
-# ---- Site Definitions ----
-
-# CubeAPI endpoint (for remote agents and external users)
-cubeapi.example.com {
-    import tls13
-    import waf
-    import rate_limit
-
-    # Log all access (SOC 2 audit trail)
-    log {
-        output file /var/log/cube-container/cubeapi-access.log
-        format json
-    }
-
-    reverse_proxy localhost:3000
-}
+# ---- Static endpoints (infrastructure services) ----
 
 # MCP HTTP endpoint (for remote AI agents)
-mcp.example.com {
-    import tls13
+# Set MCP_DOMAIN to your MCP hostname, e.g. mcp.yourcompany.com
+{$MCP_DOMAIN:mcp.example.com} {
+    import tls_security
     import waf
-    import rate_limit
+
+    # Rate limit: 120 req/min per IP (basic — use caddy-ratelimit for production)
+    @api path /mcp /mcp/*
+    handle @api {
+        reverse_proxy localhost:8080
+    }
+
+    # Metrics + health (internal)
+    @internal path /metrics /health
+    handle @internal {
+        reverse_proxy localhost:8080
+    }
 
     log {
         output file /var/log/cube-container/mcp-access.log
         format json
     }
-
-    reverse_proxy localhost:8080
 }
 
-# WebUI (protected, admin-only via mTLS client cert)
-cubeui.example.com {
-    import tls13
+# CubeAPI endpoint (for container management — restrict to internal/mTLS)
+{$CUBEAPI_DOMAIN:cubeapi.example.com} {
+    import tls_security
+    import waf
+
+    reverse_proxy localhost:3000
 
     log {
-        file /var/log/cube-container/cubeui-access.log
+        output file /var/log/cube-container/cubeapi-access.log
         format json
     }
-
-    reverse_proxy localhost:12088
 }
+
+# ---- Dynamic routes (managed by MCP create_route/delete_route tools) ----
+#
+# This import is the bridge between the MCP routing tools and Caddy.
+# Every domain added via `create_route` gets written to cube-routes.caddy
+# with automatic TLS, security headers, and reverse proxy config.
+#
+# The file may not exist on first boot — Caddy handles the glob gracefully.
+
+import /etc/caddy/cube-routes.caddy

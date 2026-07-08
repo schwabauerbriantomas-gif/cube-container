@@ -84,6 +84,17 @@ func main() {
 	versionMgr = newVersionManager(deploy)
 	netMgr = newNetworkManager()
 
+	// Secrets manager (optional — degrades gracefully if key unavailable)
+	sm, err := newSecretsManager()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[cube-mcp] WARNING: secrets manager disabled: %v\n", err)
+	} else {
+		secretsMgr = sm
+	}
+
+	// HA manager (active-passive CubeMaster failover)
+	haManager = newHAManager()
+
 	s := server.NewMCPServer(
 		"cube-container-mcp",
 		version,
@@ -290,6 +301,7 @@ func registerAllTools(s *server.MCPServer) {
 		mcp.WithString("domain", mcp.Required()),
 	), handleDeleteRoute)
 	s.AddTool(tool("list_routes", "List all configured domain routes with TLS status."), handleListRoutes)
+	s.AddTool(tool("reload_routes", "Force regenerate the Caddy route config and reload Caddy. Use after manual config changes or if routes appear stale."), handleReloadRoutes)
 
 	// --- Networking (9) ---
 	s.AddTool(toolWithArgs("add_port_mapping", "Map a host port to a container port. Allows external access to a container service.",
@@ -327,6 +339,22 @@ func registerAllTools(s *server.MCPServer) {
 
 	// Backend introspection — lets the model know which runtime is active.
 	s.AddTool(tool("backend_info", "Get information about the active container backend (docker or cube). Returns backend name, endpoint, and capabilities. Use this to understand which container runtime the MCP server is operating on."), handleBackendInfo)
+
+	// --- High availability (1) ---
+	s.AddTool(tool("ha_state", "Get the current high-availability state of this CubeMaster node: role (active/standby), active node ID, peer health, and failover timing."), handleHAState)
+
+	// --- Secrets management (4) ---
+	s.AddTool(toolWithArgs("secret_set", "Store an encrypted secret (API keys, passwords, tokens). Value is encrypted at rest with AES-256-GCM. RBAC: admin only.",
+		mcp.WithString("name", mcp.Required()),
+		mcp.WithString("value", mcp.Required()),
+	), handleSecretSet)
+	s.AddTool(toolWithArgs("secret_get", "Decrypt and retrieve a secret by name. RBAC: operator.",
+		mcp.WithString("name", mcp.Required()),
+	), handleSecretGet)
+	s.AddTool(tool("secret_list", "List all stored secrets with metadata (name, version, timestamps). Does NOT reveal values. RBAC: viewer."), handleSecretList)
+	s.AddTool(toolWithArgs("secret_delete", "Permanently delete a secret. RBAC: admin.",
+		mcp.WithString("name", mcp.Required()),
+	), handleSecretDelete)
 }
 
 // ---- Tool builders ----

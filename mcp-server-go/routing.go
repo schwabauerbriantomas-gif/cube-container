@@ -43,11 +43,18 @@ type RouteManager struct {
 }
 
 func newRouteManager() *RouteManager {
-	return &RouteManager{
+	rm := &RouteManager{
 		routesRoot:      envOr("CUBE_ROUTES_ROOT", "/var/lib/cube-container/routes"),
 		caddyConfigPath: envOr("CUBE_CADDY_CONFIG_PATH", "/etc/caddy/cube-routes.caddy"),
 		caddyReload:     strings.EqualFold(envOr("CUBE_CADDY_RELOAD", "false"), "true"),
 	}
+	// Ensure cube-routes.caddy exists so the main Caddyfile's import doesn't fail.
+	os.MkdirAll(filepath.Dir(rm.caddyConfigPath), 0755)
+	if _, err := os.Stat(rm.caddyConfigPath); os.IsNotExist(err) {
+		os.WriteFile(rm.caddyConfigPath,
+			[]byte("# Auto-created by cube-container MCP. Dynamic routes appear here.\n"), 0644)
+	}
+	return rm
 }
 
 // routeFilePath returns the JSON path for a given domain.
@@ -206,6 +213,14 @@ func (rm *RouteManager) generateCaddyConfigLocked() error {
 		for _, r := range routes {
 			upstream := fmt.Sprintf("localhost:%d", r.TargetPort)
 			b.WriteString(r.Domain + " {\n")
+			// Security headers on every auto-generated route
+			b.WriteString("    header {\n")
+			b.WriteString("        Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\"\n")
+			b.WriteString("        X-Content-Type-Options \"nosniff\"\n")
+			b.WriteString("        X-Frame-Options \"DENY\"\n")
+			b.WriteString("        Referrer-Policy \"no-referrer\"\n")
+			b.WriteString("    }\n")
+			b.WriteString("    encode zstd gzip\n")
 			if r.PathPrefix != "" {
 				prefix := r.PathPrefix
 				if !strings.HasPrefix(prefix, "/") {
@@ -277,12 +292,14 @@ func (rm *RouteManager) listRoutesLocked() ([]*Route, error) {
 // reloadCaddy triggers a graceful Caddy config reload. Errors are logged to
 // stderr but do not fail the calling operation — the config file is still valid.
 func (rm *RouteManager) reloadCaddy() {
-	cmd := exec.Command("caddy", "reload", "--config", rm.caddyConfigPath)
+	// Reload the MAIN Caddyfile (which imports cube-routes.caddy), not the fragment.
+	mainConfig := envOr("CUBE_CADDY_MAIN_CONFIG", "/etc/caddy/Caddyfile")
+	cmd := exec.Command("caddy", "reload", "--config", mainConfig)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[cube-mcp] caddy reload failed: %v: %s\n", err, string(output))
 	} else {
-		fmt.Fprintf(os.Stderr, "[cube-mcp] caddy reloaded %s\n", rm.caddyConfigPath)
+		fmt.Fprintf(os.Stderr, "[cube-mcp] caddy reloaded (routes: %s)\n", rm.caddyConfigPath)
 	}
 }
 
@@ -332,4 +349,17 @@ func handleListRoutes(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolRe
 		routes = []*Route{}
 	}
 	return okResult(routes), nil
+}
+
+func handleReloadRoutes(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Regenerate fragment from stored routes, then reload Caddy.
+	if err := routeMgr.generateCaddyConfig(); err != nil {
+		return errResult(err.Error()), nil
+	}
+	routeMgr.reloadCaddy()
+	return okResult(map[string]interface{}{
+		"status":  "reloaded",
+		"config":  routeMgr.caddyConfigPath,
+		"message": "Caddy config regenerated and reloaded",
+	}), nil
 }
