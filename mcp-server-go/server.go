@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	client          *CubeClient
+	client          ContainerBackend
 	deploy          *DeployManager
 	keyStore        *KeyStore
 	backupMgr       *BackupManager
@@ -75,7 +75,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	client = newCubeClient()
+	client = newBackend()
 	deploy = newDeployManager(client)
 	keyStore = newKeyStore()
 	backupMgr = newBackupManager(deploy, client)
@@ -94,13 +94,13 @@ func main() {
 
 	switch *mode {
 	case "stdio":
-		fmt.Fprintf(os.Stderr, "[cube-mcp] stdio mode → %s\n", client.BaseURL)
+		fmt.Fprintf(os.Stderr, "[cube-mcp] stdio mode → backend=%s endpoint=%s\n", client.BackendName(), client.Endpoint())
 		if err := server.ServeStdio(s); err != nil {
 			fmt.Fprintf(os.Stderr, "[cube-mcp] error: %v\n", err)
 			os.Exit(1)
 		}
 	case "http":
-		fmt.Fprintf(os.Stderr, "[cube-mcp] HTTP mode on :%d → %s\n", *port, client.BaseURL)
+		fmt.Fprintf(os.Stderr, "[cube-mcp] HTTP mode on :%d → backend=%s endpoint=%s\n", *port, client.BackendName(), client.Endpoint())
 		limiter := newRateLimiter(120, time.Minute)
 		audit := newAuditLogger()
 		middleware := newAuthMiddleware(keyStore, limiter, audit)
@@ -324,6 +324,9 @@ func registerAllTools(s *server.MCPServer) {
 	s.AddTool(toolWithArgs("remove_network_policy", "Remove a network policy by ID.",
 		mcp.WithString("policy_id", mcp.Required()),
 	), handleRemoveNetworkPolicy)
+
+	// Backend introspection — lets the model know which runtime is active.
+	s.AddTool(tool("backend_info", "Get information about the active container backend (docker or cube). Returns backend name, endpoint, and capabilities. Use this to understand which container runtime the MCP server is operating on."), handleBackendInfo)
 }
 
 // ---- Tool builders ----
@@ -420,6 +423,21 @@ func unwrapError(err error) *mcp.CallToolResult {
 		return errResult(fmt.Sprintf("API error %d: %s", apiErr.Status, apiErr.Detail))
 	}
 	return errResult(err.Error())
+}
+
+// ---- Tool handlers: Backend introspection ----
+
+func handleBackendInfo(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	info := map[string]interface{}{
+		"backend":  client.BackendName(),
+		"endpoint": client.Endpoint(),
+		"features": []string{
+			"container_lifecycle", "templates", "deploy_from_git", "deploy_from_code",
+			"volumes", "backup", "rollback", "routing_tls", "networking", "exec",
+		},
+		"tool_count": 44,
+	}
+	return okResult(info), nil
 }
 
 // ---- Tool handlers: Cluster ----

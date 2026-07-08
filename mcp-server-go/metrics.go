@@ -98,7 +98,7 @@ func (m *MetricsCollector) snapshot() (map[string]uint64, uint64, uint64, map[st
 // ---- Prometheus text exposition writer ----
 
 // writeMetrics writes all metrics to w in Prometheus text exposition format.
-func writeMetrics(w http.ResponseWriter, collector *MetricsCollector, client *CubeClient) {
+func writeMetrics(w http.ResponseWriter, collector *MetricsCollector, client ContainerBackend) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
 	// --- Cluster state gauges (collected live from CubeAPI) ---

@@ -14,12 +14,12 @@ import (
 
 // DeployManager manages git-based persistent deploys and volumes.
 type DeployManager struct {
-	client         *CubeClient
+	client         ContainerBackend
 	VolumesRoot    string
 	WorkspacesRoot string
 }
 
-func newDeployManager(client *CubeClient) *DeployManager {
+func newDeployManager(client ContainerBackend) *DeployManager {
 	dm := &DeployManager{
 		client:         client,
 		VolumesRoot:    envOr("CUBE_VOLUMES_ROOT", "/volumes"),

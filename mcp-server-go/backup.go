@@ -28,10 +28,10 @@ type BackupManager struct {
 	BackupRoot string
 	VolumesRoot string
 	DeployMgr  *DeployManager
-	Client     *CubeClient
+	Client     ContainerBackend
 }
 
-func newBackupManager(dm *DeployManager, client *CubeClient) *BackupManager {
+func newBackupManager(dm *DeployManager, client ContainerBackend) *BackupManager {
 	bm := &BackupManager{
 		BackupRoot:  envOr("CUBE_BACKUP_ROOT", "/var/lib/cube-container/backups"),
 		VolumesRoot: dm.VolumesRoot,

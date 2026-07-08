@@ -31,6 +31,10 @@ type CubeClient struct {
 	UserAgent string
 }
 
+func (c *CubeClient) BackendName() string { return "cube" }
+
+func (c *CubeClient) Endpoint() string { return c.BaseURL }
+
 func newCubeClient() *CubeClient {
 	baseURL := envOr("CUBE_API_URL", "http://localhost:3000")
 	apiKey := envOr("CUBE_API_KEY", "e2b_000000")

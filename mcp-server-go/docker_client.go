@@ -1,11 +1,10 @@
-//go:build docker
-
 // Package main: Docker Engine API backend.
 //
 // This file implements the SAME method signatures as CubeClient in client.go,
 // but talks to the Docker Engine API over the unix socket instead of CubeAPI.
 //
-// Build with: go build -tags docker
+// The DockerClient is compiled in by default (no build tag needed).
+// It is activated at runtime by newBackend() when a Docker socket is detected.
 //
 // DockerClient maps Docker responses into the same JSON structure that the rest
 // of the MCP server (deploy.go, backup.go, server.go) expects, so that the only
@@ -35,6 +34,10 @@ type DockerClient struct {
 	APIVersion string
 	HTTP       *http.Client
 }
+
+func (c *DockerClient) BackendName() string { return "docker" }
+
+func (c *DockerClient) Endpoint() string { return c.SocketPath }
 
 // newDockerClient builds a DockerClient pointed at the local Docker daemon.
 // The unix socket path and API version are configurable via environment.

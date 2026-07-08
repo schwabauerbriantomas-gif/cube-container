@@ -83,6 +83,8 @@ var toolPermissions = map[string]Role{
 	"add_network_policy":    RoleAdmin,
 	"list_network_policies": RoleViewer,
 	"remove_network_policy": RoleAdmin,
+	// Backend introspection — informational, safe for all roles
+	"backend_info": RoleViewer,
 }
 
 // roleLevel returns a numeric level for comparison (higher = more permissions).
