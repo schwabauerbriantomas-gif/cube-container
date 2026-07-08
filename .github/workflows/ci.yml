@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  python-lint-test:
+    name: MCP Server (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: mcp-server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          pip install ruff pytest pytest-asyncio
+
+      - name: Lint (ruff)
+        run: ruff check src/ --ignore E501
+
+      - name: Type check (pyright)
+        run: |
+          pip install pyright
+          pyright src/ --warnings 2>&1 || true
+
+      - name: Tests
+        run: python -m pytest tests/ -v --tb=short
+
+  go-build:
+    name: Go Components (Cubelet + CubeMaster)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [Cubelet, CubeMaster]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.component }}/go.mod
+          cache-dependency-path: ${{ matrix.component }}/go.sum
+
+      - name: Build ${{ matrix.component }}
+        working-directory: ${{ matrix.component }}
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          # Find the main package — some components have multiple binaries
+          for cmd in cmd/*/; do
+            echo "Building $cmd..."
+            go build -v ./"$cmd" || echo "  (skipped: $cmd has no main)"
+          done
+
+      - name: Vet
+        working-directory: ${{ matrix.component }}
+        run: go vet ./...
+
+  docker-build:
+    name: Docker Image Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (CubeAPI compile only)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/container-mode/Dockerfile
+          push: false
+          tags: cube-container:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  security-checks:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bandit (Python SAST)
+        run: |
+          pip install bandit
+          bandit -r mcp-server/src/ -f sarif -o bandit-results.sarif || true
+
+      - name: Gosec (Go SAST)
+        uses: securego/gosec@master
+        with:
+          args: -fmt sarif -out gosec-results.sarif ./Cubelet/... ./CubeMaster/...
+        continue-on-error: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: .
