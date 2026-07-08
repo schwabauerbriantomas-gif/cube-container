@@ -16,7 +16,7 @@
 #     cube-container:latest
 
 # ---- Stage 1: Build Go components ----
-FROM golang:1.24 AS go-builder
+FROM golang:1.25 AS go-builder
 
 WORKDIR /workspace
 
