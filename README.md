@@ -60,7 +60,7 @@ Runs on COTS mini-PCs, ARM SBCs, recycled office machines, Proxmox VMs, or any L
 
 ### What Was Added
 
-- ✅ **MCP Server** (Python) — 22 tools for AI-agent-driven orchestration
+- ✅ **MCP Server** (Go) — 22 tools for AI-agent-driven orchestration, single static binary
 - ✅ **Auth Gateway** (FastAPI) — API-key + RBAC + rate limiting + audit for multiuser production
 - ✅ **Caddy Proxy** — TLS 1.3 + WAF + rate limiting for external exposure
 - ✅ **Persistent Deploy** — deploy from git or inline code with volume support
@@ -207,6 +207,14 @@ docker run -d --name cube-node \
     }
   }
 }
+```
+
+### Build the MCP server from source
+
+```bash
+cd mcp-server-go
+CGO_ENABLED=0 go build -o cube-mcp .
+# Produces a single 11MB static binary — no runtime dependencies
 ```
 
 ### Deploy a service from git (via MCP)
@@ -363,14 +371,14 @@ cube-container/
 ├── cube-lifecycle-manager/    # Auto-pause/resume controller
 ├── CubeProxy/                 # nginx reverse proxy + TLS
 ├── web/                       # React web console (:12088)
-├── mcp-server/                # Python — MCP server (22 tools) + auth gateway
-│   ├── src/cube_mcp/
-│   │   ├── server.py          # MCP server — dual stdio + HTTP mode
-│   │   ├── client.py          # CubeAPI HTTP client
-│   │   ├── deploy.py          # Persistent deploy from git/code
-│   │   ├── security.py        # Input validation
-│   │   └── auth_gateway.py    # Auth + RBAC + audit (FastAPI)
-│   └── pyproject.toml
+├── mcp-server-go/             # Go — MCP server (22 tools, single static binary)
+│   ├── server.go              # MCP server — dual stdio + HTTP mode, 22 tool handlers
+│   ├── client.go              # CubeAPI HTTP client
+│   ├── deploy.go              # Persistent deploy from git/code
+│   ├── security.go            # Input validation
+│   ├── security_test.go       # 11 tests (path traversal, git URL, command injection)
+│   ├── go.mod
+│   └── go.sum
 ├── deploy/
 │   └── container-mode/        # Dockerfile, Caddyfile, config
 ├── examples/                  # Integration examples
@@ -384,21 +392,15 @@ cube-container/
 ### Run the MCP server locally (stdio mode)
 
 ```bash
-cd mcp-server
-pip install -e .
-CUBE_API_URL=http://localhost:3000 cube-mcp
-```
-
-### Run the auth gateway
-
-```bash
-python -m cube_mcp.auth_gateway --port 8090
+cd mcp-server-go
+go build -o cube-mcp .
+CUBE_API_URL=http://localhost:3000 ./cube-mcp
 ```
 
 ### Run tests
 
 ```bash
-cd mcp-server && python -m pytest tests/ -v
+cd mcp-server-go && go test -v ./...
 ```
 
 ---

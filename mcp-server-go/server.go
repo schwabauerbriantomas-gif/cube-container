@@ -1,0 +1,571 @@
+// Package main: MCP server exposing Cube Container cluster operations.
+// Port of server.py — dual-mode stdio + HTTP, 22 tools.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+)
+
+var (
+	client  *CubeClient
+	deploy  *DeployManager
+	version = "1.0.0"
+)
+
+func main() {
+	mode := flag.String("mode", "stdio", "Server mode: stdio or http")
+	port := flag.Int("port", 8080, "HTTP port (only used in http mode)")
+	flag.Parse()
+
+	client = newCubeClient()
+	deploy = newDeployManager(client)
+
+	s := server.NewMCPServer(
+		"cube-container-mcp",
+		version,
+		server.WithToolCapabilities(false),
+	)
+
+	registerAllTools(s)
+
+	switch *mode {
+	case "stdio":
+		fmt.Fprintf(os.Stderr, "[cube-mcp] stdio mode → %s\n", client.BaseURL)
+		if err := server.ServeStdio(s); err != nil {
+			fmt.Fprintf(os.Stderr, "[cube-mcp] error: %v\n", err)
+			os.Exit(1)
+		}
+	case "http":
+		fmt.Fprintf(os.Stderr, "[cube-mcp] HTTP mode on :%d → %s\n", *port, client.BaseURL)
+		httpServer := server.NewStreamableHTTPServer(s)
+		if err := httpServer.Start(fmt.Sprintf(":%d", *port)); err != nil {
+			fmt.Fprintf(os.Stderr, "[cube-mcp] error: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "unknown mode: %s (use stdio or http)\n", *mode)
+		os.Exit(1)
+	}
+}
+
+// ---- Tool registration ----
+
+func registerAllTools(s *server.MCPServer) {
+	// --- Cluster (5) ---
+	s.AddTool(tool("cluster_health", "Check if the Cube Container cluster API is reachable and healthy."), handleClusterHealth)
+	s.AddTool(tool("cluster_overview", "Get cluster capacity overview: total nodes, running containers, CPU/RAM usage."), handleClusterOverview)
+	s.AddTool(tool("cluster_versions", "Get version matrix of all cluster components (CubeAPI, CubeMaster, Cubelet)."), handleClusterVersions)
+	s.AddTool(tool("list_nodes", "List all nodes in the cluster with their resource capacity and current load."), handleListNodes)
+	s.AddTool(toolWithArgs("get_node", "Get detailed info for a specific node.",
+		mcp.WithString("node_id", mcp.Required(), mcp.Description("Node ID")),
+	), handleGetNode)
+
+	// --- Container lifecycle (7) ---
+	s.AddTool(toolWithArgs("list_containers", "List running containers (sandboxes) with optional filters. Args: state (running/paused/stopped), limit (default 50).",
+		mcp.WithString("state", mcp.Description("Filter: running, paused, or stopped")),
+		mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
+	), handleListContainers)
+	s.AddTool(toolWithArgs("get_container", "Get detailed info for a specific container by ID.",
+		mcp.WithString("container_id", mcp.Required()),
+	), handleGetContainer)
+	s.AddTool(toolWithArgs("create_container", "Create and start a new container from a template. Args: template_id (required), memory_mb (default 512), cpu_count (default 1.0), env_vars, metadata.",
+		mcp.WithString("template_id", mcp.Required()),
+		mcp.WithNumber("memory_mb", mcp.Description("Memory limit in MB (default 512)")),
+		mcp.WithNumber("cpu_count", mcp.Description("CPU cores (default 1.0)")),
+	), handleCreateContainer)
+	s.AddTool(toolWithArgs("kill_container", "Stop and remove a container by ID.",
+		mcp.WithString("container_id", mcp.Required()),
+	), handleKillContainer)
+	s.AddTool(toolWithArgs("pause_container", "Freeze a container (cgroup freezer). Uses ~0 CPU while paused. Resume with resume_container.",
+		mcp.WithString("container_id", mcp.Required()),
+	), handlePauseContainer)
+	s.AddTool(toolWithArgs("resume_container", "Resume (un-freeze) a paused container. Typically resumes in ~15ms.",
+		mcp.WithString("container_id", mcp.Required()),
+	), handleResumeContainer)
+	s.AddTool(toolWithArgs("get_container_logs", "Fetch recent logs from a container.",
+		mcp.WithString("container_id", mcp.Required()),
+		mcp.WithNumber("limit", mcp.Description("Max log lines (default 100)")),
+	), handleGetContainerLogs)
+
+	// --- Templates (3) ---
+	s.AddTool(tool("list_templates", "List all available container templates."), handleListTemplates)
+	s.AddTool(toolWithArgs("create_template", "Create a new template from an OCI image. Args: image (required, e.g. 'python:3.12-slim'), expose_ports, writable_layer_size_gb.",
+		mcp.WithString("image", mcp.Required(), mcp.Description("OCI image reference")),
+	), handleCreateTemplate)
+	s.AddTool(toolWithArgs("get_template", "Get details of a specific template.",
+		mcp.WithString("template_id", mcp.Required()),
+	), handleGetTemplate)
+
+	// --- Persistent deploy (4) ---
+	s.AddTool(toolWithArgs("deploy_from_git", "Deploy from a git repo with persistent storage. Flow: clone → volume → template → container. Code survives restarts.",
+		mcp.WithString("git_url", mcp.Required(), mcp.Description("Repository URL")),
+		mcp.WithString("branch", mcp.Description("Git branch (default main)")),
+		mcp.WithString("image", mcp.Description("Base OCI image (default python:3.12-slim)")),
+		mcp.WithString("start_cmd", mcp.Description("Override auto-detected start command")),
+		mcp.WithString("volume_name", mcp.Description("Existing volume name")),
+		mcp.WithNumber("memory_mb", mcp.Description("Memory limit (default 256)")),
+	), handleDeployFromGit)
+	s.AddTool(toolWithArgs("deploy_from_code", "Deploy from inline code files (no git needed). Files written to persistent volume.",
+		mcp.WithString("app_name", mcp.Required()),
+	), handleDeployFromCode)
+	s.AddTool(toolWithArgs("update_code", "Pull latest code from git and sync to the container's volume. Sends restart signal.",
+		mcp.WithString("container_id", mcp.Required()),
+		mcp.WithString("git_url", mcp.Required()),
+		mcp.WithString("branch", mcp.Description("Git branch (default main)")),
+	), handleUpdateCode)
+	s.AddTool(toolWithArgs("exec_in_container", "Execute a command inside a running container. Returns stdout, stderr, exit code.",
+		mcp.WithString("container_id", mcp.Required()),
+		mcp.WithString("command", mcp.Required()),
+		mcp.WithNumber("timeout", mcp.Description("Timeout in seconds (default 30)")),
+	), handleExecInContainer)
+
+	// --- Volumes (3) ---
+	s.AddTool(tool("list_volumes", "List all persistent volumes with size and file count."), handleListVolumes)
+	s.AddTool(toolWithArgs("create_volume", "Create a new persistent volume directory.",
+		mcp.WithString("name", mcp.Required()),
+	), handleCreateVolume)
+	s.AddTool(toolWithArgs("delete_volume", "Delete a persistent volume. WARNING: destroys all data permanently.",
+		mcp.WithString("name", mcp.Required()),
+	), handleDeleteVolume)
+}
+
+// ---- Tool builders ----
+
+func tool(name, desc string) mcp.Tool {
+	return mcp.NewTool(name, mcp.WithDescription(desc))
+}
+
+func toolWithArgs(name, desc string, opts ...mcp.ToolOption) mcp.Tool {
+	allOpts := append([]mcp.ToolOption{mcp.WithDescription(desc)}, opts...)
+	return mcp.NewTool(name, allOpts...)
+}
+
+// ---- Argument extraction helpers ----
+
+func argString(args map[string]interface{}, key string) string {
+	if v, ok := args[key]; ok {
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}
+
+func argInt(args map[string]interface{}, key string, def int) int {
+	if v, ok := args[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case int:
+			return n
+		}
+	}
+	return def
+}
+
+func argFloat(args map[string]interface{}, key string, def float64) float64 {
+	if v, ok := args[key]; ok {
+		if n, ok := v.(float64); ok {
+			return n
+		}
+	}
+	return def
+}
+
+func argMap(args map[string]interface{}, key string) map[string]interface{} {
+	if v, ok := args[key].(map[string]interface{}); ok {
+		return v
+	}
+	return nil
+}
+
+func argStringSlice(args map[string]interface{}, key string) []string {
+	if v, ok := args[key].([]interface{}); ok {
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			result = append(result, fmt.Sprintf("%v", item))
+		}
+		return result
+	}
+	return nil
+}
+
+func argIntSlice(args map[string]interface{}, key string) []int {
+	if v, ok := args[key].([]interface{}); ok {
+		result := make([]int, 0, len(v))
+		for _, item := range v {
+			switch n := item.(type) {
+			case float64:
+				result = append(result, int(n))
+			case int:
+				result = append(result, n)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// ---- Result helpers ----
+
+func okResult(data interface{}) *mcp.CallToolResult {
+	return mcp.NewToolResultText(toJSON(data))
+}
+
+func errResult(msg string) *mcp.CallToolResult {
+	return mcp.NewToolResultError(fmt.Sprintf("Error: %s", msg))
+}
+
+func parseArgs(request mcp.CallToolRequest) map[string]interface{} {
+	return request.GetArguments()
+}
+
+func unwrapError(err error) *mcp.CallToolResult {
+	if apiErr, ok := err.(*CubeAPIError); ok {
+		return errResult(fmt.Sprintf("API error %d: %s", apiErr.Status, apiErr.Detail))
+	}
+	return errResult(err.Error())
+}
+
+// ---- Tool handlers: Cluster ----
+
+func handleClusterHealth(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data, err := client.Health()
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleClusterOverview(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data, err := client.ClusterOverview()
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleClusterVersions(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data, err := client.ClusterVersions()
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleListNodes(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data, err := client.ListNodes()
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleGetNode(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	nodeID := argString(args, "node_id")
+	if nodeID == "" {
+		return errResult("node_id is required"), nil
+	}
+	data, err := client.GetNode(nodeID)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+// ---- Tool handlers: Containers ----
+
+func handleListContainers(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	state := argString(args, "state")
+	limit := argInt(args, "limit", 50)
+	data, err := client.ListSandboxes(state, limit)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleGetContainer(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	id := argString(args, "container_id")
+	if id == "" {
+		return errResult("container_id is required"), nil
+	}
+	data, err := client.GetSandbox(id)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleCreateContainer(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	tmplID := argString(args, "template_id")
+	if tmplID == "" {
+		return errResult("template_id is required"), nil
+	}
+	memMB := argInt(args, "memory_mb", 512)
+	cpuCount := argFloat(args, "cpu_count", 1.0)
+	envVars := argMap(args, "env_vars")
+	metadata := argMap(args, "metadata")
+	data, err := client.CreateSandbox(tmplID, memMB, cpuCount, envVars, metadata)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleKillContainer(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	id := argString(args, "container_id")
+	if id == "" {
+		return errResult("container_id is required"), nil
+	}
+	data, err := client.KillSandbox(id)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handlePauseContainer(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	id := argString(args, "container_id")
+	if id == "" {
+		return errResult("container_id is required"), nil
+	}
+	data, err := client.PauseSandbox(id)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleResumeContainer(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	id := argString(args, "container_id")
+	if id == "" {
+		return errResult("container_id is required"), nil
+	}
+	data, err := client.ResumeSandbox(id)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleGetContainerLogs(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	id := argString(args, "container_id")
+	if id == "" {
+		return errResult("container_id is required"), nil
+	}
+	limit := argInt(args, "limit", 100)
+	data, err := client.GetSandboxLogs(id, limit)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+// ---- Tool handlers: Templates ----
+
+func handleListTemplates(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data, err := client.ListTemplates()
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleCreateTemplate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	image := argString(args, "image")
+	if image == "" {
+		return errResult("image is required"), nil
+	}
+	ports := argIntSlice(args, "expose_ports")
+	if len(ports) == 0 {
+		ports = []int{8000}
+	}
+	layerGB := argInt(args, "writable_layer_size_gb", 1)
+	data, err := client.CreateTemplateFromImage(image, ports, layerGB, nil, nil, "")
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleGetTemplate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	id := argString(args, "template_id")
+	if id == "" {
+		return errResult("template_id is required"), nil
+	}
+	data, err := client.GetTemplate(id)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+// ---- Tool handlers: Deploy ----
+
+func handleDeployFromGit(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	gitURL := argString(args, "git_url")
+	if gitURL == "" {
+		return errResult("git_url is required"), nil
+	}
+	branch := argString(args, "branch")
+	if branch == "" {
+		branch = "main"
+	}
+	image := argString(args, "image")
+	if image == "" {
+		image = "python:3.12-slim"
+	}
+	ports := argIntSlice(args, "expose_ports")
+	if len(ports) == 0 {
+		ports = []int{8000}
+	}
+	envVars := argMap(args, "env_vars")
+	startCmd := argString(args, "start_cmd")
+	volumeName := argString(args, "volume_name")
+	memMB := argInt(args, "memory_mb", 256)
+
+	data, err := deploy.DeployFromGit(gitURL, branch, image, ports, envVars, startCmd, volumeName, memMB, 1.0)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleDeployFromCode(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	appName := argString(args, "app_name")
+	if appName == "" {
+		return errResult("app_name is required"), nil
+	}
+	// files is a map of filename→content
+	files := make(map[string]string)
+	if rawFiles, ok := args["files"].(map[string]interface{}); ok {
+		for k, v := range rawFiles {
+			files[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	if len(files) == 0 {
+		return errResult("files is required (and must not be empty)"), nil
+	}
+	image := argString(args, "image")
+	if image == "" {
+		image = "python:3.12-slim"
+	}
+	ports := argIntSlice(args, "expose_ports")
+	if len(ports) == 0 {
+		ports = []int{8000}
+	}
+	envVars := argMap(args, "env_vars")
+	startCmd := argString(args, "start_cmd")
+	memMB := argInt(args, "memory_mb", 256)
+
+	data, err := deploy.DeployFromCode(appName, files, image, ports, envVars, startCmd, memMB)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleUpdateCode(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	containerID := argString(args, "container_id")
+	if containerID == "" {
+		return errResult("container_id is required"), nil
+	}
+	gitURL := argString(args, "git_url")
+	if gitURL == "" {
+		return errResult("git_url is required"), nil
+	}
+	branch := argString(args, "branch")
+	if branch == "" {
+		branch = "main"
+	}
+
+	data, err := deploy.UpdateCode(containerID, gitURL, branch)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleExecInContainer(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	containerID := argString(args, "container_id")
+	if containerID == "" {
+		return errResult("container_id is required"), nil
+	}
+	command := argString(args, "command")
+	if command == "" {
+		return errResult("command is required"), nil
+	}
+	// Validate command
+	if _, err := validateCommand(command); err != nil {
+		return errResult(err.Error()), nil
+	}
+	timeout := argInt(args, "timeout", 30)
+	data, err := client.ExecInSandbox(containerID, command, timeout)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+// ---- Tool handlers: Volumes ----
+
+func handleListVolumes(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data, err := deploy.ListVolumes()
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleCreateVolume(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	name := argString(args, "name")
+	if name == "" {
+		return errResult("name is required"), nil
+	}
+	data, err := deploy.CreateVolume(name)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleDeleteVolume(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	name := argString(args, "name")
+	if name == "" {
+		return errResult("name is required"), nil
+	}
+	data, err := deploy.DeleteVolume(name)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+// ---- Misc ----
+
+// Ensure strings package is used (for future expansion)
+var _ = strings.TrimSpace
+var _ = json.Marshal

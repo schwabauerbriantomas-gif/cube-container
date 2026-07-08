@@ -7,40 +7,36 @@ on:
     branches: [master, main]
 
 jobs:
-  python-lint-test:
-    name: MCP Server (Python ${{ matrix.python }})
+  mcp-server:
+    name: MCP Server (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12"]
+        go: ["1.24", "1.25"]
     defaults:
       run:
-        working-directory: mcp-server
+        working-directory: mcp-server-go
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: ${{ matrix.python }}
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: mcp-server-go/go.sum
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]" 2>/dev/null || pip install -e .
-          pip install ruff pytest pytest-asyncio
+      - name: Download dependencies
+        run: go mod download
 
-      - name: Lint (ruff)
-        run: ruff check src/ --ignore E501
+      - name: Build (CGO disabled, static binary)
+        run: CGO_ENABLED=0 go build -v .
 
-      - name: Type check (pyright)
-        run: |
-          pip install pyright
-          pyright src/ --warnings 2>&1 || true
+      - name: Vet
+        run: go vet ./...
 
       - name: Tests
-        run: python -m pytest tests/ -v --tb=short
+        run: go test -v -race ./...
 
   go-build:
     name: Go Components (Cubelet + CubeMaster)
@@ -96,15 +92,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bandit (Python SAST)
-        run: |
-          pip install bandit
-          bandit -r mcp-server/src/ -f sarif -o bandit-results.sarif || true
-
       - name: Gosec (Go SAST)
         uses: securego/gosec@master
         with:
-          args: -fmt sarif -out gosec-results.sarif ./Cubelet/... ./CubeMaster/...
+          args: -fmt sarif -out gosec-results.sarif ./mcp-server-go/... ./Cubelet/... ./CubeMaster/...
         continue-on-error: true
 
       - name: Upload SARIF

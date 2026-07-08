@@ -39,12 +39,12 @@ WORKDIR /workspace
 COPY CubeAPI/ ./CubeAPI/
 RUN cd CubeAPI && cargo build --release && cp target/release/cube-api /cubeapi
 
-# ---- Stage 3: Build MCP server ----
-FROM python:3.12-slim AS mcp-builder
+# ---- Stage 3: Build MCP server (Go) ----
+FROM golang:1.25 AS mcp-builder
 
 WORKDIR /workspace
-COPY mcp-server/ ./mcp-server/
-RUN cd mcp-server && pip install --no-cache-dir mcp httpx && pip install -e .
+COPY mcp-server-go/ ./mcp-server-go/
+RUN cd mcp-server-go && CGO_ENABLED=0 go build -o /cube-mcp .
 
 # ---- Stage 4: Runtime ----
 FROM ubuntu:22.04
@@ -54,6 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     runc \
     iptables \
     ca-certificates \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Binaries from builders
@@ -62,8 +63,7 @@ COPY --from=go-builder /cubecli /usr/local/bin/cubecli
 COPY --from=go-builder /cubemaster /usr/local/bin/cubemaster
 COPY --from=go-builder /cubemastercli /usr/local/bin/cubemastercli
 COPY --from=rust-builder /cubeapi /usr/local/bin/cubeapi
-COPY --from=mcp-builder /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
-COPY --from=mcp-builder /workspace/mcp-server/ /opt/cube-mcp/
+COPY --from=mcp-builder /cube-mcp /usr/local/bin/cube-mcp
 
 # Config
 COPY deploy/container-mode/config.toml /etc/cube-container/config.toml
