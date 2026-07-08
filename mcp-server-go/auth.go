@@ -58,6 +58,12 @@ var toolPermissions = map[string]Role{
 	"update_code":       RoleOperator,
 	// Destructive — admin
 	"delete_volume":     RoleAdmin,
+	// Backup — operator to create/list, admin to delete/restore
+	"backup_volume":     RoleOperator,
+	"backup_container":  RoleOperator,
+	"list_backups":      RoleViewer,
+	"restore_backup":    RoleAdmin,
+	"delete_backup":     RoleAdmin,
 }
 
 // roleLevel returns a numeric level for comparison (higher = more permissions).

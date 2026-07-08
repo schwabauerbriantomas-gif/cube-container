@@ -19,10 +19,11 @@ import (
 )
 
 var (
-	client  *CubeClient
-	deploy  *DeployManager
+	client   *CubeClient
+	deploy   *DeployManager
 	keyStore *KeyStore
-	version = "1.0.0"
+	backupMgr *BackupManager
+	version  = "1.0.0"
 )
 
 func main() {
@@ -74,6 +75,7 @@ func main() {
 	client = newCubeClient()
 	deploy = newDeployManager(client)
 	keyStore = newKeyStore()
+	backupMgr = newBackupManager(deploy, client)
 
 	s := server.NewMCPServer(
 		"cube-container-mcp",
@@ -234,6 +236,21 @@ func registerAllTools(s *server.MCPServer) {
 	s.AddTool(toolWithArgs("delete_volume", "Delete a persistent volume. WARNING: destroys all data permanently.",
 		mcp.WithString("name", mcp.Required()),
 	), handleDeleteVolume)
+
+	// --- Backup & Restore (5) ---
+	s.AddTool(toolWithArgs("backup_volume", "Create a tar.gz backup of a volume with SHA256 integrity check. Backup is stored locally and can be restored later.",
+		mcp.WithString("volume_name", mcp.Required(), mcp.Description("Name of the volume to backup")),
+	), handleBackupVolume)
+	s.AddTool(toolWithArgs("backup_container", "Create a full backup of a container: config manifest + all mounted volumes. Allows full recovery on restore.",
+		mcp.WithString("container_id", mcp.Required()),
+	), handleBackupContainer)
+	s.AddTool(tool("list_backups", "List all available backups with size, checksum, and restorable status."), handleListBackups)
+	s.AddTool(toolWithArgs("restore_backup", "Restore a backup by ID. Verifies SHA256 integrity before restoring. For containers, recreates the container from manifest.",
+		mcp.WithString("backup_id", mcp.Required()),
+	), handleRestoreBackup)
+	s.AddTool(toolWithArgs("delete_backup", "Delete a backup file and its manifest permanently.",
+		mcp.WithString("backup_id", mcp.Required()),
+	), handleDeleteBackup)
 }
 
 // ---- Tool builders ----
@@ -661,6 +678,67 @@ func handleDeleteVolume(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return unwrapError(err), nil
 	}
 	return okResult(data), nil
+}
+
+// ---- Tool handlers: Backup & Restore ----
+
+func handleBackupVolume(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	volName := argString(args, "volume_name")
+	if volName == "" {
+		return errResult("volume_name is required"), nil
+	}
+	data, err := backupMgr.BackupVolume(volName)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleBackupContainer(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	containerID := argString(args, "container_id")
+	if containerID == "" {
+		return errResult("container_id is required"), nil
+	}
+	data, err := backupMgr.BackupContainer(containerID)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleListBackups(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data, err := backupMgr.ListBackups()
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleRestoreBackup(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	backupID := argString(args, "backup_id")
+	if backupID == "" {
+		return errResult("backup_id is required"), nil
+	}
+	data, err := backupMgr.RestoreBackup(backupID)
+	if err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(data), nil
+}
+
+func handleDeleteBackup(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := parseArgs(req)
+	backupID := argString(args, "backup_id")
+	if backupID == "" {
+		return errResult("backup_id is required"), nil
+	}
+	if err := backupMgr.DeleteBackup(backupID); err != nil {
+		return unwrapError(err), nil
+	}
+	return okResult(map[string]interface{}{"backup_id": backupID, "status": "deleted"}), nil
 }
 
 // ---- Misc ----
