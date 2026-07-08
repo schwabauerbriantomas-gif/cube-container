@@ -118,9 +118,9 @@ func main() {
 		adminAPI := &AuthAdminAPI{keys: keyStore}
 
 		// The MCP streamable HTTP server from mcp-go handles /mcp
-		httpServer := server.NewStreamableHTTPServer(s)
+		mcpHTTP := server.NewStreamableHTTPServer(s)
 		mcpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			httpServer.ServeHTTP(w, r)
+			mcpHTTP.ServeHTTP(w, r)
 		})
 
 		// Wrap MCP with auth (tool name extracted from JSON body for RBAC)
@@ -128,19 +128,46 @@ func main() {
 
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", authedMCP)
-		mux.Handle("/auth/keys", adminAPI)        // POST: create, GET: list
-		mux.Handle("/auth/keys/", adminAPI)        // DELETE: revoke
+
+		// Admin key management — requires admin auth
+		mux.Handle("/auth/keys", middleware.RequireAdmin(adminAPI))
+		mux.Handle("/auth/keys/", middleware.RequireAdmin(adminAPI))
+
 		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"status":"ok"}`))
 		})
-		mux.HandleFunc("/metrics", metricsHandler)
+
+		// Metrics — requires viewer auth (cluster state is sensitive)
+		mux.Handle("/metrics", middleware.RequireRole(http.HandlerFunc(metricsHandler), RoleViewer))
+
+		// Container logs streaming — requires viewer auth
+		mux.Handle("/streams/", middleware.RequireRole(http.HandlerFunc(handleLogStream), RoleViewer))
+
+		// Git webhook — uses its own secret validation (constant-time)
 		mux.HandleFunc("/webhook/git", handleGitWebhook)
-		mux.HandleFunc("/streams/", handleLogStream) // /streams/{container_id}/logs (SSE)
+
+		// HA endpoints — requires viewer auth
+		if haManager != nil {
+			mux.Handle("/ha/heartbeat", http.HandlerFunc(haManager.HandleHeartbeat))
+			mux.Handle("/ha/state", middleware.RequireRole(http.HandlerFunc(haManager.HandleHAGetState), RoleViewer))
+		}
+
+		// Wrap the entire mux with body size limiting + timeouts
+		limitedMux := withBodyLimit(mux)
 
 		addr := fmt.Sprintf(":%d", *port)
 		fmt.Fprintf(os.Stderr, "[cube-mcp] listening on %s\n", addr)
 		fmt.Fprintf(os.Stderr, "[cube-mcp] endpoints: POST /mcp, GET /health, POST /auth/keys\n")
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		httpServer := &http.Server{
+			Addr:              addr,
+			Handler:           limitedMux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      0, // SSE streams need no write timeout
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20, // 1MB max headers
+		}
+		if err := httpServer.ListenAndServe(); err != nil {
 			fmt.Fprintf(os.Stderr, "[cube-mcp] error: %v\n", err)
 			os.Exit(1)
 		}

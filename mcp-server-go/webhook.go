@@ -5,6 +5,7 @@
 package main
 
 import (
+	"crypto/hmac"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -72,12 +73,13 @@ func handleGitWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Optional secret validation (X-Git-Token header OR ?token= query param)
+	// Uses constant-time comparison to prevent timing attacks (H2).
 	if webhookConfig.secret != "" {
 		provided := r.Header.Get("X-Git-Token")
 		if provided == "" {
 			provided = r.URL.Query().Get("token")
 		}
-		if provided != webhookConfig.secret {
+		if !hmac.Equal([]byte(provided), []byte(webhookConfig.secret)) {
 			writeWebhookJSON(w, http.StatusUnauthorized, webhookResponse{
 				Status:  "error",
 				Message: "invalid or missing webhook secret",

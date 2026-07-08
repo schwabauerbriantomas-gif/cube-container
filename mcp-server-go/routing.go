@@ -69,11 +69,21 @@ func (rm *RouteManager) createRoute(domain, containerID string, targetPort int, 
 	if domain == "" {
 		return nil, fmt.Errorf("domain is required")
 	}
+	// Sanitize domain to prevent Caddy config injection (H4).
+	// A domain with newlines could inject arbitrary Caddy config directives.
+	if err := validateDomain(domain); err != nil {
+		return nil, err
+	}
 	if containerID == "" {
 		return nil, fmt.Errorf("container_id is required")
 	}
 	if targetPort <= 0 || targetPort > 65535 {
 		return nil, fmt.Errorf("target_port must be between 1 and 65535")
+	}
+	if pathPrefix != "" {
+		if err := validatePathPrefix(pathPrefix); err != nil {
+			return nil, err
+		}
 	}
 
 	r := &Route{
@@ -362,4 +372,41 @@ func handleReloadRoutes(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallTool
 		"config":  routeMgr.caddyConfigPath,
 		"message": "Caddy config regenerated and reloaded",
 	}), nil
+}
+
+// validateDomain ensures a domain name is safe to embed in a Caddy config file.
+// Prevents config injection via newlines, braces, or other Caddy metacharacters (H4).
+func validateDomain(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("domain is required")
+	}
+	if len(domain) > 253 {
+		return fmt.Errorf("domain too long (max 253 chars per RFC 1035)")
+	}
+	// Domain must be: labels separated by dots. Each label: alphanumeric + hyphens.
+	// No whitespace, no newlines, no braces, no special chars.
+	for _, c := range domain {
+		if !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '.' && c != '-' && c != '_' && c != ':' && c != '*' {
+			return fmt.Errorf("domain contains invalid character %q (only alphanumeric, dots, hyphens, underscores, wildcards allowed)", c)
+		}
+	}
+	// Reject newlines explicitly (covered by above but be explicit for readability)
+	if strings.ContainsAny(domain, "\n\r	 {}();|&<>`$\\'\"") {
+		return fmt.Errorf("domain contains forbidden characters (config injection prevention)")
+	}
+	return nil
+}
+
+// validatePathPrefix ensures a URL path prefix is safe for Caddy config.
+func validatePathPrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if len(prefix) > 500 {
+		return fmt.Errorf("path prefix too long")
+	}
+	if strings.ContainsAny(prefix, "\n\r	 {};|&<>`$\\'\"") {
+		return fmt.Errorf("path prefix contains forbidden characters")
+	}
+	return nil
 }

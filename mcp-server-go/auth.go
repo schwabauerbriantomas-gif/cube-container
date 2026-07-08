@@ -600,3 +600,41 @@ func (a *AuthAdminAPI) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(204)
 }
+
+// ---- Standalone auth guards for non-MCP endpoints ----
+
+// RequireRole wraps an http.Handler with API key auth + role check.
+// Used for endpoints that don't go through the MCP JSON-RPC path (metrics,
+// streams, HA state). Returns 401 without valid credentials, 403 if the role
+// is insufficient.
+func (am *AuthMiddleware) RequireRole(next http.Handler, required Role) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key, secret := extractAuth(r)
+		apiKey, err := am.keys.Validate(key, secret)
+		if err != nil {
+			writeJSONError(w, 401, err.Error())
+			return
+		}
+		if roleLevel(apiKey.Role) < roleLevel(required) {
+			writeJSONError(w, 403, fmt.Sprintf("role '%s' requires '%s'", apiKey.Role, required))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireAdmin is a shorthand for RequireRole(_, RoleAdmin).
+func (am *AuthMiddleware) RequireAdmin(next http.Handler) http.Handler {
+	return am.RequireRole(next, RoleAdmin)
+}
+
+// withBodyLimit wraps an http.Handler, limiting request bodies to maxBodyBytes.
+// This prevents memory exhaustion from large POST bodies (C4).
+const maxBodyBytes = 10 << 20 // 10MB
+
+func withBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		next.ServeHTTP(w, r)
+	})
+}

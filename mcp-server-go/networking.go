@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,11 +150,19 @@ func (nm *NetworkManager) AddDNSAlias(alias, containerID, target string) (*DNSAl
 	if !strings.Contains(alias, ".") {
 		return nil, fmt.Errorf("alias must be a FQDN (e.g. myapp.cube.local)")
 	}
+	// Prevent /etc/hosts injection: alias must not contain newlines or spaces (H5)
+	if strings.ContainsAny(alias, "\n\r	 ") {
+		return nil, fmt.Errorf("alias contains invalid characters (whitespace/newlines forbidden)")
+	}
 	if containerID == "" {
 		return nil, fmt.Errorf("container_id is required")
 	}
 	if target == "" {
 		return nil, fmt.Errorf("target is required (container IP)")
+	}
+	// Validate target is a valid IP address (prevents /etc/hosts injection, H5)
+	if net.ParseIP(target) == nil {
+		return nil, fmt.Errorf("target must be a valid IP address (got '%s')", target)
 	}
 
 	dns := &DNSAlias{

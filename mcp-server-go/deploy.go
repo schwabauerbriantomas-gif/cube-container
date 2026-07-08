@@ -319,6 +319,11 @@ func (dm *DeployManager) UpdateCode(containerID, gitURL, branch string) (map[str
 // ---- Internal helpers ----
 
 func (dm *DeployManager) gitCloneOrPull(gitURL, branch, workspace string) (map[string]interface{}, error) {
+	// Validate branch name to prevent option injection (H3).
+	if err := validateBranchName(branch); err != nil {
+		return nil, err
+	}
+
 	gitDir := filepath.Join(workspace, ".git")
 	if _, err := os.Stat(gitDir); err == nil {
 		// Pull: fetch + reset
@@ -330,14 +335,36 @@ func (dm *DeployManager) gitCloneOrPull(gitURL, branch, workspace string) (map[s
 			"output": truncate(output, 500),
 		}, nil
 	}
-	// Clone
+	// Clone — note the -- separator before positional args to prevent option injection.
 	os.MkdirAll(workspace, 0755)
-	output := runGit(workspace, "clone", "--depth", "1", "-b", branch, gitURL, workspace)
+	output := runGit(workspace, "clone", "--depth", "1", "-b", branch, "--", gitURL, workspace)
 	return map[string]interface{}{
 		"action": "cloned",
 		"branch": branch,
 		"output": truncate(output, 500),
 	}, nil
+}
+
+// validateBranchName ensures a git branch name is safe to pass as a CLI arg.
+// Rejects names starting with - (option injection) and names with shell metacharacters.
+func validateBranchName(branch string) error {
+	if branch == "" {
+		return fmt.Errorf("branch name cannot be empty")
+	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("branch name cannot start with '-' (would be interpreted as a git option)")
+	}
+	// Git branch names can contain: alphanumeric, -, _, ., /
+	// But no spaces, no shell metacharacters, no backticks
+	for _, c := range branch {
+		if c == ' ' || c == '`' || c == '$' || c == '\\' || c == '"' || c == '\'' || c == ';' || c == '|' || c == '&' || c == '<' || c == '>' || c == '\n' {
+			return fmt.Errorf("branch name contains invalid character: %q", c)
+		}
+	}
+	if len(branch) > 200 {
+		return fmt.Errorf("branch name too long (max 200 chars)")
+	}
+	return nil
 }
 
 func (dm *DeployManager) syncCode(source, dest string) map[string]interface{} {
