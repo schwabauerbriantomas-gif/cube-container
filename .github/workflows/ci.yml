@@ -82,17 +82,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/container-mode/Dockerfile
-          push: false
-          tags: cube-container:ci
-          load: true
+      - name: Build image (standard docker build)
+        run: |
+          docker build -f deploy/container-mode/Dockerfile -t cube-container:ci .
+          docker image ls cube-container:ci
+          echo "::notice::Image built successfully"
 
   security-checks:
     name: Security Scan
