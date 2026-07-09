@@ -19,7 +19,7 @@
 #     cube-container:latest
 
 # ---- Stage 1: Build Go components ----
-FROM golang:1.25.12 AS go-builder
+FROM golang:1.26.5 AS go-builder
 
 WORKDIR /workspace
 
@@ -43,7 +43,7 @@ COPY CubeAPI/ ./CubeAPI/
 RUN cd CubeAPI && cargo build --release && cp target/release/cube-api /cubeapi
 
 # ---- Stage 3: Build MCP server (Go) ----
-FROM golang:1.25.12 AS mcp-builder
+FROM golang:1.26.5 AS mcp-builder
 
 WORKDIR /workspace
 COPY mcp-server-go/ ./mcp-server-go/
