@@ -441,9 +441,48 @@ mcp-server-go/
 └── .github/workflows/   — CI (build, test, vet, gosec, govulncheck)
 ```
 
+## Documentation
+
+### For Developers and AI Agents
+
+| Document | Purpose |
+|----------|---------|
+| [ARCHITECTURE.md](mcp-server-go/ARCHITECTURE.md) | Code map — file categories, patterns, data flow, how to add features |
+| [AGENT_GUIDE.md](mcp-server-go/AGENT_GUIDE.md) | Conventions, checklists, common mistakes, security checklist |
+| [skills/](skills/) | 8 workflow skills teaching the AI model correct tool sequences |
+| [docs/UNTRUSTED_HOSTING.md](docs/UNTRUSTED_HOSTING.md) | Isolation options for hosting third-party/untrusted code |
+
+### Skills (AI Workflow Playbooks)
+
+The `skills/` directory contains playbooks that teach the AI model how to chain tools into correct workflows:
+
+| Skill | When to use |
+|-------|------------|
+| `deploy-from-scratch.md` | Full deploy: template → container → route → health → scale → alert |
+| `zero-downtime-update.md` | Rolling or blue-green deployment with health gate |
+| `database-provisioning.md` | Managed DB creation with secrets + health + backup |
+| `incident-response.md` | Diagnose failures: logs → metrics → events → audit |
+| `multi-node-deployment.md` | Deploy across cluster nodes with volume migration |
+| `security-hardening.md` | Lock down: tokens, secrets, alerts, cert monitoring |
+| `backup-strategy.md` | Scheduled backups, restore, GC strategy |
+| `environment-lifecycle.md` | Dev → staging → prod promotion workflow |
+
 ## Roadmap
 
+### Security
 - [ ] Network isolation for database containers (`CreateNetwork` in backend interface)
+- [ ] Hardened container defaults (seccomp + AppArmor + cap-drop)
+- [ ] `--runtime` parameter for gVisor/Kata/Firecracker support
+- [ ] `CUBE_SECURE_RUNTIME` env var for node-level isolation default
+
+### Untrusted Code Hosting
+- [ ] gVisor (`runsc`) support for edge nodes (4GB RAM)
+- [ ] Kata Containers for dedicated build servers (8GB+ RAM)
+- [ ] firecracker-containerd for bare-metal FaaS
+- [ ] Knative + Firecracker for multi-tenant SaaS mode
+- See [docs/UNTRUSTED_HOSTING.md](docs/UNTRUSTED_HOSTING.md) for full analysis
+
+### Features
 - [ ] Real-time event streaming via SSE
 - [ ] Log timestamp extraction from known formats (RFC3339, syslog)
 - [ ] Email channel implementation (SMTP relay)
