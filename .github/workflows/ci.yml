@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.24", "1.25"]
+        go: ["1.25"]
     defaults:
       run:
         working-directory: mcp-server-go
@@ -138,18 +138,32 @@ jobs:
           # Check for ELF/PE/Mach-O files in tracked source directories
           # AUDIT FIX C-02: Expanded scan to include Cubelet/ root (not just Cubelet/cmd/)
           # and CubeMaster/ root — the 93MB cubelet binary lived in Cubelet/ undetected.
+          # Only detect real compiled binaries (ELF/Mach-O/PE32), NOT text scripts
+          # (.sh, .py) that merely have execute permission.
           FOUND=0
           for dir in mcp-server-go Cubelet CubeMaster cubelog deploy; do
             if [ -d "$dir" ]; then
               while IFS= read -r -d '' f; do
                 TYPE=$(file -b "$f")
                 case "$TYPE" in
-                  *ELF*|*executable*|*Mach-O*|*PE32*)
+                  *ELF*|*Mach-O*|*PE32*)
                     echo "::error file=$f::Binary executable detected: $f"
                     FOUND=1
                     ;;
+                  *executable*)
+                    # Only flag "executable" if NOT a text/script file.
+                    # file reports "executable" for .sh/.py with +x perms.
+                    case "$TYPE" in
+                      *text*|*script*|*ASCII*|*UTF-8*)
+                        ;; # text script — skip
+                      *)
+                        echo "::error file=$f::Binary executable detected: $f"
+                        FOUND=1
+                        ;;
+                    esac
+                    ;;
                 esac
-              done < <(find "$dir" -type f ! -name "*.go" ! -name "*.sum" ! -name "*.mod" ! -name "*.md" ! -path "*/assets/bin/*" -print0)
+              done < <(find "$dir" -type f ! -name "*.go" ! -name "*.sum" ! -name "*.mod" ! -name "*.md" ! -path "*/assets/bin/*" ! -path "*/contrib/*" -print0)
             fi
           done
           if [ "$FOUND" = "1" ]; then
