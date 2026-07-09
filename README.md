@@ -8,7 +8,7 @@
 
 A container orchestration platform controlled by AI through the Model Context Protocol. An MCP server that replaces the DevOps role — the operations interface is natural language, not YAML.
 
-158 tools covering the complete DevOps lifecycle: containers, images, deployments, scaling, health monitoring, networking, routing, secrets, backups, high availability, multi-node clusters, environments, notifications, scheduled jobs, database provisioning, certificates, event streaming, and **full hypervisor management** (VMs via KVM/libvirt, ZFS storage, GPU passthrough).
+161 tools covering the complete DevOps lifecycle: containers, images, deployments, scaling, health monitoring, networking, routing, secrets, backups, high availability, multi-node clusters, environments, notifications, scheduled jobs, database provisioning, certificates, event streaming, and **full hypervisor management** (VMs via KVM/libvirt, ZFS storage, GPU passthrough).
 
 ## Architecture
 
@@ -56,9 +56,9 @@ docker build -t cube-container .
 docker run -d -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock cube-container
 ```
 
-## Tool Reference (158 tools)
+## Tool Reference (161 tools)
 
-<!-- Tool count is verified by CI: `grep -c 'registerTool(s,' mcp-server-go/tools_registration.go` must equal 158. -->
+<!-- Tool count is verified by CI: `grep -c 'registerTool(s,' mcp-server-go/tools_registration.go` must equal 161. -->
 
 ### Cluster & Nodes (12)
 
@@ -357,6 +357,14 @@ These tools provide hardware-level isolation for running untrusted code. Each sa
 | `gpu_stats` | Real-time GPU utilization (GPU%, mem%, temp, power, clocks) | viewer |
 | `gpu_assign` | Assign GPU to VM via VFIO passthrough (requires IOMMU) | admin |
 | `gpu_release` | Release GPU from VM, rebind to host driver | admin |
+
+### Hypervisor: Cloud-init & Templates (3)
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `vm_cloudinit_create` | Generate cloud-init NoCloud ISO (SSH keys, hostname, packages) | operator |
+| `vm_template_list` | List available cloud images (qcow2, img, iso) | viewer |
+| `vm_create_from_template` | Create VM from cloud image + cloud-init seed (CoW overlay) | operator |
 
 ## Security
 

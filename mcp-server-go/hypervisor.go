@@ -293,6 +293,12 @@ func handleVMDelete(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	// Stop first if running (best effort)
 	runVirsh("destroy", name)
 
+	// Delete all snapshots first (virsh requires this before undefine)
+	snapOut, _ := runVirsh("snapshot-list", "--domain", name, "--name")
+	for _, snapName := range splitNonEmpty(snapOut) {
+		runVirsh("snapshot-delete", "--domain", name, snapName)
+	}
+
 	// Undefine — try with --nvram first, fallback for older libvirt
 	_, err := runVirsh("undefine", name, "--nvram")
 	if err != nil {
@@ -441,7 +447,7 @@ func getVMIPs(name string) []string {
 
 // ---- Domain XML generation ----
 
-const domainXMLTemplate = `<domain type='kvm'>
+const domainXMLTemplate = `<domain type='{{.DomainType}}'>
   <name>{{.Name}}</name>
   <memory unit='KiB'>{{.MemKiB}}</memory>
   <currentMemory unit='KiB'>{{.MemKiB}}</currentMemory>
@@ -454,7 +460,7 @@ const domainXMLTemplate = `<domain type='kvm'>
   <features>
     <acpi/><apic/>
   </features>
-  <cpu mode='host-passthrough'/>
+  <cpu mode='{{.CPUMode}}'/>
   <on_poweroff>destroy</on_poweroff>
   <on_reboot>restart</on_reboot>
   <on_crash>destroy</on_crash>
@@ -490,6 +496,13 @@ const domainXMLTemplate = `<domain type='kvm'>
   </devices>
 </domain>`
 
+// kvmAvailable checks whether /dev/kvm exists (hardware virtualization).
+// When false, VMs fall back to type='qemu' (software emulation, slower).
+func kvmAvailable() bool {
+	_, err := exec.Command("test", "-c", "/dev/kvm").CombinedOutput()
+	return err == nil
+}
+
 func generateDomainXML(cfg *VMConfig) (string, error) {
 	diskPath := cfg.DiskPath
 	if diskPath == "" {
@@ -497,20 +510,32 @@ func generateDomainXML(cfg *VMConfig) (string, error) {
 		createQcow2Disk(diskPath, cfg.DiskGB)
 	}
 
+	// Detect KVM availability — fall back to qemu emulation
+	domainType := "kvm"
+	cpuMode := "host-passthrough"
+	if !kvmAvailable() {
+		domainType = "qemu"
+		cpuMode = "host-model"
+	}
+
 	data := struct {
-		Name     string
-		MemKiB   int
-		VCPU     int
-		DiskPath string
-		ISOPath  string
-		Network  string
+		Name       string
+		DomainType string
+		CPUMode    string
+		MemKiB     int
+		VCPU       int
+		DiskPath   string
+		ISOPath    string
+		Network    string
 	}{
-		Name:     cfg.Name,
-		MemKiB:   cfg.MemoryMB * 1024,
-		VCPU:     cfg.VCPU,
-		DiskPath: diskPath,
-		ISOPath:  cfg.ISOPath,
-		Network:  cfg.Network,
+		Name:       cfg.Name,
+		DomainType: domainType,
+		CPUMode:    cpuMode,
+		MemKiB:     cfg.MemoryMB * 1024,
+		VCPU:       cfg.VCPU,
+		DiskPath:   diskPath,
+		ISOPath:    cfg.ISOPath,
+		Network:    cfg.Network,
 	}
 
 	tmpl, err := template.New("domain").Parse(domainXMLTemplate)

@@ -227,6 +227,10 @@ var toolPermissions = map[string]Role{
 	"gpu_stats":   RoleViewer,
 	"gpu_assign":  RoleAdmin,
 	"gpu_release": RoleAdmin,
+	// Hypervisor: cloud-init & templates — operator to create, viewer to list
+	"vm_cloudinit_create":    RoleOperator,
+	"vm_template_list":       RoleViewer,
+	"vm_create_from_template": RoleOperator,
 }
 
 // roleLevel returns a numeric level for comparison (higher = more permissions).

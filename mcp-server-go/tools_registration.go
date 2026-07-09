@@ -628,4 +628,23 @@ func registerAllTools(s *server.MCPServer) {
 		mcp.WithString("pci_address", mcp.Required()),
 		mcp.WithString("vm_name", mcp.Required()),
 	), handleGPURelease)
+
+	// ── Hypervisor: cloud-init & templates (3) ─────────────────────────
+	registerTool(s, toolWithArgs("vm_cloudinit_create", "Generate a cloud-init NoCloud ISO for headless VM provisioning. Creates user-data (SSH keys, hostname, packages) and meta-data, then builds the seed ISO. Use with vm_create_from_template.",
+		mcp.WithString("hostname", mcp.Required(), mcp.Description("Hostname for the VM")),
+		mcp.WithArray("ssh_keys", mcp.Description("SSH public keys for the default user")),
+		mcp.WithString("username", mcp.Description("Default user (default: ubuntu)")),
+		mcp.WithString("password", mcp.Description("Password (if SSH keys not provided)")),
+		mcp.WithArray("packages", mcp.Description("Packages to install on first boot")),
+		mcp.WithString("user_data", mcp.Description("Raw cloud-init user-data (appended to structured config)")),
+	), handleVMCloudInitCreate)
+	registerTool(s, tool("vm_template_list", "List available VM cloud images (qcow2, img, iso) in the default libvirt image directory."), handleVMTemplateList)
+	registerTool(s, toolWithArgs("vm_create_from_template", "Create a VM from a cloud image + cloud-init seed ISO. Creates a copy-on-write overlay disk from the template, attaches the cloud-init ISO, and boots.",
+		mcp.WithString("name", mcp.Required(), mcp.Description("VM name")),
+		mcp.WithString("template_path", mcp.Required(), mcp.Description("Path to cloud image qcow2")),
+		mcp.WithString("seed_iso", mcp.Description("Path to cloud-init seed ISO (from vm_cloudinit_create)")),
+		mcp.WithNumber("vcpu", mcp.Description("vCPUs (default 2)")),
+		mcp.WithNumber("memory_mb", mcp.Description("Memory in MB (default 2048)")),
+		mcp.WithNumber("disk_gb", mcp.Description("Disk size in GB (default 20)")),
+	), handleVMCreateFromTemplate)
 }
