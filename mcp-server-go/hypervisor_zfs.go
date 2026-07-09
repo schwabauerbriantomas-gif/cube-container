@@ -118,6 +118,9 @@ func handleZPoolCreate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if name == "" || devices == "" {
 		return errResult("name and devices are required"), nil
 	}
+	if err := validateZFSDatasetName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
 
 	_, err := runZpool("create", name, devices)
 	if err != nil {
@@ -159,6 +162,9 @@ func handleZPoolDestroy(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	name := argString(req.GetArguments(), "name")
 	if name == "" {
 		return errResult("name is required"), nil
+	}
+	if err := validateZFSDatasetName(name); err != nil {
+		return errResult(err.Error()), nil
 	}
 
 	_, err := runZpool("destroy", name)
@@ -217,6 +223,9 @@ func handleZDatasetCreate(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 	if name == "" {
 		return errResult("name is required"), nil
 	}
+	if err := validateZFSDatasetName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
 
 	args := []string{"create"}
 	compression := argString(req.GetArguments(), "compression")
@@ -245,6 +254,9 @@ func handleZDatasetDestroy(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	if name == "" {
 		return errResult("name is required"), nil
 	}
+	if err := validateZFSDatasetName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
 
 	_, err := runZfs("destroy", "-r", name)
 	if err != nil {
@@ -264,6 +276,12 @@ func handleZSnapshotCreate(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	name := argString(req.GetArguments(), "name")
 	if dataset == "" || name == "" {
 		return errResult("dataset and name are required"), nil
+	}
+	if err := validateZFSDatasetName(dataset); err != nil {
+		return errResult(fmt.Sprintf("invalid dataset: %v", err)), nil
+	}
+	if err := validateSnapshotName(name); err != nil {
+		return errResult(fmt.Sprintf("invalid snapshot name: %v", err)), nil
 	}
 
 	fullName := dataset + "@" + name
@@ -322,6 +340,9 @@ func handleZSnapshotDestroy(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	if name == "" {
 		return errResult("name is required (format: pool/dataset@snap)"), nil
 	}
+	if err := validateZFSDatasetName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
 
 	_, err := runZfs("destroy", name)
 	if err != nil {
@@ -339,6 +360,12 @@ func handleZSnapshotClone(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 	cloneName := argString(req.GetArguments(), "clone_name")
 	if snapshot == "" || cloneName == "" {
 		return errResult("snapshot and clone_name are required"), nil
+	}
+	if err := validateZFSDatasetName(snapshot); err != nil {
+		return errResult(fmt.Sprintf("invalid snapshot: %v", err)), nil
+	}
+	if err := validateZFSDatasetName(cloneName); err != nil {
+		return errResult(fmt.Sprintf("invalid clone_name: %v", err)), nil
 	}
 
 	_, err := runZfs("clone", snapshot, cloneName)
@@ -360,6 +387,9 @@ func handleZSnapshotRollback(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	name := argString(req.GetArguments(), "name")
 	if name == "" {
 		return errResult("name is required (format: pool/dataset@snap)"), nil
+	}
+	if err := validateZFSDatasetName(name); err != nil {
+		return errResult(err.Error()), nil
 	}
 
 	_, err := runZfs("rollback", "-r", name)

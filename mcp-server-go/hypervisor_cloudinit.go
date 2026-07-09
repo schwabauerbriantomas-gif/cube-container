@@ -84,11 +84,17 @@ func handleVMCloudInitCreate(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	if spec.Hostname == "" {
 		return errResult("hostname is required"), nil
 	}
-	if len(spec.SSHKeys) == 0 && spec.Password == "" {
-		return errResult("either ssh_keys or password is required for initial access"), nil
+	if err := validateHostname(spec.Hostname); err != nil {
+		return errResult(err.Error()), nil
 	}
 	if spec.Username == "" {
 		spec.Username = "ubuntu"
+	}
+	if err := validateCloudInitUsername(spec.Username); err != nil {
+		return errResult(fmt.Sprintf("invalid username: %v", err)), nil
+	}
+	if len(spec.SSHKeys) == 0 && spec.Password == "" {
+		return errResult("either ssh_keys or password is required for initial access"), nil
 	}
 
 	// Create seed directory
@@ -100,14 +106,14 @@ func handleVMCloudInitCreate(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	// Generate user-data
 	userData := generateUserData(&spec)
 	userDataPath := filepath.Join(seedDir, "user-data")
-	if err := os.WriteFile(userDataPath, []byte(userData), 0644); err != nil {
+	if err := os.WriteFile(userDataPath, []byte(userData), 0600); err != nil {
 		return errResult(fmt.Sprintf("failed to write user-data: %v", err)), nil
 	}
 
 	// Generate meta-data
 	metaData := generateMetaData(&spec)
 	metaDataPath := filepath.Join(seedDir, "meta-data")
-	if err := os.WriteFile(metaDataPath, []byte(metaData), 0644); err != nil {
+	if err := os.WriteFile(metaDataPath, []byte(metaData), 0600); err != nil {
 		return errResult(fmt.Sprintf("failed to write meta-data: %v", err)), nil
 	}
 
@@ -180,6 +186,13 @@ func handleVMCreateFromTemplate(_ context.Context, req mcp.CallToolRequest) (*mc
 
 	if vmName == "" || templatePath == "" {
 		return errResult("name and template_path are required"), nil
+	}
+	if err := validateVMName(vmName); err != nil {
+		return errResult(err.Error()), nil
+	}
+	// Validate template path is within allowed directories
+	if err := validateFilePath(templatePath, defaultImageDir); err != nil {
+		return errResult(fmt.Sprintf("invalid template_path: %v", err)), nil
 	}
 
 	// Verify template exists

@@ -370,7 +370,7 @@ These tools provide hardware-level isolation for running untrusted code. Each sa
 
 ### Audit History
 
-47 security issues identified and fixed across 5 audit rounds:
+47 security issues identified and fixed across 5 audit rounds + Round 7 (hypervisor layer):
 
 | Round | Critical | High | Medium | Low | Total |
 |-------|----------|------|--------|-----|-------|
@@ -379,7 +379,8 @@ These tools provide hardware-level isolation for running untrusted code. Each sa
 | 3 | 1 (C7) | 3 (H9-H11) | 3 (M8-M10) | 2 (B6-B7) | 9 |
 | 4 | 1 (C8) | 1 (H12) | 2 (M11-M12) | 1 (B8) | 5 |
 | 5 | — | 1 (AS-1) | 3 (AS-2, AS-3, AS-4) | 2 (AS-5, AS-6) | 7 |
-| **Total** | **8** | **13** | **15** | **10** | **47** |
+| 7 | 2 (HV-C1, HV-C2) | 3 (HV-H1, HV-H2, HV-H3) | 2 (HV-M1, HV-M2) | 2 (HV-L1, HV-L2) | 9 |
+| **Total** | **10** | **16** | **17** | **12** | **56** |
 
 Round 5 (Attack Surface Audit) findings:
 
@@ -392,6 +393,20 @@ Round 5 (Attack Surface Audit) findings:
 | AS-5 | Low | Webhook secret accepted via `?token=` query param | Removed query param fallback. `X-Git-Token` header is now the only accepted method. |
 | AS-6 | Low | HA heartbeat endpoint lacks rate limiting | Per-IP rate limiter (60 req/min) added to `HandleHeartbeat`. |
 | AS-7 | Info | Audit hash chain uses plain SHA-256 (recomputable) | `computeAuditHash` now uses HMAC-SHA256 keyed with `CUBE_SECRETS_KEY`. Falls back to SHA-256 for backward compatibility with existing logs. |
+
+Round 7 (Hypervisor Layer Audit) — 9 findings in the 32 new hypervisor tools:
+
+| ID | Severity | Finding | Fix |
+|----|----------|---------|-----|
+| HV-C1 | Critical | Shell injection via `writeFileAsRoot`: PCI address interpolated in `sh -c "echo '%s' > %s"` | Replaced with `exec.Command("tee", path)` + stdin pipe. No shell interpolation. |
+| HV-C2 | Critical | Shell injection via `writeFilePublic`: VM name interpolated in `sh -c "cat > '%s'"` | Replaced with `exec.Command("tee", path)` + stdin pipe. |
+| HV-H1 | High | Argument injection: virsh VM/snapshot names unsanitized | Added `validateVMName`, `validateSnapshotName` — DNS-safe charset only, rejects shell metacharacters. |
+| HV-H2 | High | Path traversal via VM name in `/tmp/cube-vm-<name>.xml` | `validateVMName` rejects `/`, `..`, and all path separators. |
+| HV-H3 | High | XML injection via VM name in domain XML template | `validateVMName` rejects `<`, `>`, `&`, `'`, `"` — all XML special chars. |
+| HV-M1 | Medium | YAML injection in cloud-init: hostname/username unsanitized | Added `validateHostname` (RFC 1123) and `validateCloudInitUsername` (alphanumeric + underscore). |
+| HV-M2 | Medium | Path traversal via `template_path` in `vm_create_from_template` | Added `validateFilePath` — must be absolute, within allowed dirs, no traversal. |
+| HV-L1 | Low | No resource limits on `vm_create` (arbitrary vcpu/mem/disk) | Added limits: max 64 vCPU, 256GB RAM, 8TB disk. |
+| HV-L2 | Low | Cloud-init seed files (with passwords) world-readable (0644) | Changed to 0600. |
 
 ### Security Features
 

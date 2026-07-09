@@ -284,19 +284,25 @@ func handleGPUAssign(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 	if pciAddr == "" || vmName == "" {
 		return errResult("pci_address and vm_name are required"), nil
 	}
+	if err := validatePCIAddress(pciAddr); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if err := validateVMName(vmName); err != nil {
+		return errResult(err.Error()), nil
+	}
 
 	// Detach from host driver and bind to vfio-pci
 	normalized := normalizePCIAddress(pciAddr)
 
 	// 1. Unbind from current driver
 	unbindPath := "/sys/bus/pci/devices/" + normalized + "/driver/unbind"
-	if err := writeFileAsRoot(unbindPath, normalized); err != nil {
+	if err := writeFileToSysfs(unbindPath, normalized); err != nil {
 		// Might already be unbound — continue
 	}
 
 	// 2. Get vendor:device ID
-	vendorID, err := readFileAsString("/sys/bus/pci/devices/" + normalized + "/vendor")
-	deviceID, err2 := readFileAsString("/sys/bus/pci/devices/" + normalized + "/device")
+	vendorID, err := readFileSafe("/sys/bus/pci/devices/" + normalized + "/vendor")
+	deviceID, err2 := readFileSafe("/sys/bus/pci/devices/" + normalized + "/device")
 	if err != nil || err2 != nil {
 		return errResult("failed to read GPU vendor/device IDs from sysfs"), nil
 	}
@@ -304,7 +310,7 @@ func handleGPUAssign(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 
 	// 3. Bind to vfio-pci
 	vfioNewIDPath := "/sys/bus/pci/drivers/vfio-pci/new_id"
-	if err := writeFileAsRoot(vfioNewIDPath, vendorDevice); err != nil {
+	if err := writeFileToSysfs(vfioNewIDPath, vendorDevice); err != nil {
 		return errResult(fmt.Sprintf("failed to bind GPU %s to vfio-pci: %v. Ensure VFIO is enabled in kernel (intel_iommu=on / amd_iommu=on)", normalized, err)), nil
 	}
 
@@ -318,7 +324,7 @@ func handleGPUAssign(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 </hostdev>`, bus, slot, fn)
 
 	tmpPath := "/tmp/cube-gpu-" + vmName + ".xml"
-	if err := writeFilePublic(tmpPath, deviceXML); err != nil {
+	if err := writeFileSafe(tmpPath, deviceXML); err != nil {
 		return errResult(fmt.Sprintf("failed to write device XML: %v", err)), nil
 	}
 
@@ -340,6 +346,12 @@ func handleGPURelease(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if pciAddr == "" || vmName == "" {
 		return errResult("pci_address and vm_name are required"), nil
 	}
+	if err := validatePCIAddress(pciAddr); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if err := validateVMName(vmName); err != nil {
+		return errResult(err.Error()), nil
+	}
 
 	normalized := normalizePCIAddress(pciAddr)
 
@@ -352,7 +364,7 @@ func handleGPURelease(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 </hostdev>`, bus, slot, fn)
 
 	tmpPath := "/tmp/cube-gpu-release-" + vmName + ".xml"
-	if err := writeFilePublic(tmpPath, deviceXML); err != nil {
+	if err := writeFileSafe(tmpPath, deviceXML); err != nil {
 		return errResult(fmt.Sprintf("failed to write device XML: %v", err)), nil
 	}
 
@@ -364,11 +376,11 @@ func handleGPURelease(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	// Rebind to original driver (nvidia, amdgpu, i915)
 	// Remove from vfio-pci and let kernel rebind
 	unbindPath := "/sys/bus/pci/devices/" + normalized + "/driver/unbind"
-	writeFileAsRoot(unbindPath, normalized)
+	writeFileToSysfs(unbindPath, normalized)
 
 	// Try to rebind to nvidia driver
 	nvidiaBindPath := "/sys/bus/pci/drivers/nvidia/bind"
-	writeFileAsRoot(nvidiaBindPath, normalized)
+	writeFileToSysfs(nvidiaBindPath, normalized)
 
 	return okResult(GPUAssignmentResult{
 		PCIAddress: normalized,
@@ -463,19 +475,26 @@ func parseOptionalInt(s string) *int {
 	return nil
 }
 
-// ---- File helpers ----
+// ---- File helpers (safe — no shell interpolation) ----
 
-func writeFileAsRoot(path, content string) error {
-	return exec.Command("sh", "-c", fmt.Sprintf("echo '%s' > %s", content, path)).Run()
-}
-
-func writeFilePublic(path, content string) error {
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("cat > '%s'", path))
+// writeFileToSysfs writes content to a sysfs/procfs path safely.
+// Uses exec.Command with array args — NO shell interpolation.
+func writeFileToSysfs(path, content string) error {
+	cmd := exec.Command("tee", path)
 	cmd.Stdin = strings.NewReader(content)
 	return cmd.Run()
 }
 
-func readFileAsString(path string) (string, error) {
+// writeFileSafe writes content to a file path without shell interpolation.
+// The path itself is passed as a direct argument (not through sh -c).
+func writeFileSafe(path, content string) error {
+	cmd := exec.Command("tee", path)
+	cmd.Stdin = strings.NewReader(content)
+	return cmd.Run()
+}
+
+// readFileSafe reads a file via cat with array arg (no shell).
+func readFileSafe(path string) (string, error) {
 	out, err := exec.Command("cat", path).Output()
 	if err != nil {
 		return "", err

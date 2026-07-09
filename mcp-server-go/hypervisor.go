@@ -161,6 +161,9 @@ func handleVMGet(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResul
 	if name == "" {
 		return errResult("name is required"), nil
 	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
 
 	info, err := getVMInfo(name)
 	if err != nil {
@@ -187,6 +190,18 @@ func handleVMCreate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	}
 	if cfg.Name == "" {
 		return errResult("name is required"), nil
+	}
+	if err := validateVMName(cfg.Name); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if cfg.VCPU < 1 || cfg.VCPU > maxVCPUPerVM {
+		return errResult(fmt.Sprintf("vcpu must be between 1 and %d", maxVCPUPerVM)), nil
+	}
+	if cfg.MemoryMB < 128 || cfg.MemoryMB > maxMemoryMBPerVM {
+		return errResult(fmt.Sprintf("memory_mb must be between 128 and %d", maxMemoryMBPerVM)), nil
+	}
+	if cfg.DiskGB < 1 || cfg.DiskGB > maxDiskGBPerVM {
+		return errResult(fmt.Sprintf("disk_gb must be between 1 and %d", maxDiskGBPerVM)), nil
 	}
 	if cfg.Network == "" {
 		cfg.Network = "default"
@@ -232,6 +247,9 @@ func handleVMStart(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 	if name == "" {
 		return errResult("name is required"), nil
 	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
 	_, err := runVirsh("start", name)
 	if err != nil {
 		return unwrapError(err), nil
@@ -243,6 +261,9 @@ func handleVMStop(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResu
 	name := argString(req.GetArguments(), "name")
 	if name == "" {
 		return errResult("name is required"), nil
+	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
 	}
 	force := argString(req.GetArguments(), "force")
 	if force == "true" {
@@ -264,6 +285,9 @@ func handleVMPause(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 	if name == "" {
 		return errResult("name is required"), nil
 	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
 	_, err := runVirsh("suspend", name)
 	if err != nil {
 		return unwrapError(err), nil
@@ -276,6 +300,9 @@ func handleVMResume(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	if name == "" {
 		return errResult("name is required"), nil
 	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
 	_, err := runVirsh("resume", name)
 	if err != nil {
 		return unwrapError(err), nil
@@ -287,6 +314,9 @@ func handleVMDelete(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	name := argString(req.GetArguments(), "name")
 	if name == "" {
 		return errResult("name is required"), nil
+	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
 	}
 	removeDisk := argString(req.GetArguments(), "remove_disk")
 
@@ -323,6 +353,12 @@ func handleVMSnapshot(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if name == "" || snapName == "" {
 		return errResult("name and snapshot_name are required"), nil
 	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if err := validateSnapshotName(snapName); err != nil {
+		return errResult(err.Error()), nil
+	}
 	_, err := runVirsh("snapshot-create-as", name, snapName)
 	if err != nil {
 		return unwrapError(err), nil
@@ -338,6 +374,9 @@ func handleVMSnapshotList(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 	name := argString(req.GetArguments(), "name")
 	if name == "" {
 		return errResult("name is required"), nil
+	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
 	}
 	out, err := runVirsh("snapshot-list", "--domain", name, "--name")
 	if err != nil {
@@ -361,6 +400,12 @@ func handleVMSnapshotRestore(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	if name == "" || snapName == "" {
 		return errResult("name and snapshot_name are required"), nil
 	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if err := validateSnapshotName(snapName); err != nil {
+		return errResult(err.Error()), nil
+	}
 	_, err := runVirsh("snapshot-revert", "--domain", name, snapName)
 	if err != nil {
 		return unwrapError(err), nil
@@ -377,6 +422,12 @@ func handleVMSnapshotDelete(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	snapName := argString(req.GetArguments(), "snapshot_name")
 	if name == "" || snapName == "" {
 		return errResult("name and snapshot_name are required"), nil
+	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if err := validateSnapshotName(snapName); err != nil {
+		return errResult(err.Error()), nil
 	}
 	_, err := runVirsh("snapshot-delete", "--domain", name, snapName)
 	if err != nil {
@@ -396,6 +447,12 @@ func handleVMMigrate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 	destHost := argString(req.GetArguments(), "dest_host")
 	if name == "" || destHost == "" {
 		return errResult("name and dest_host are required"), nil
+	}
+	if err := validateVMName(name); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if err := validateDestHost(destHost); err != nil {
+		return errResult(err.Error()), nil
 	}
 	live := argString(req.GetArguments(), "live")
 	migrateURI := fmt.Sprintf("qemu+ssh://%s/system", destHost)
