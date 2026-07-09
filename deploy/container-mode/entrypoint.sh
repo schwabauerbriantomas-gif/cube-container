@@ -2,7 +2,7 @@
 set -e
 
 # Cube Container — Single Node Entrypoint
-# Starts containerd, CubeMaster, Cubelet, CubeAPI, and MCP server
+# Starts containerd, CubeMaster, Cubelet, CubeAPI, MCP server, and Caddy.
 
 echo "[cube-container] Starting containerd..."
 containerd &
@@ -29,8 +29,28 @@ for i in $(seq 1 15); do
 done
 
 echo "[cube-container] CubeAPI ready at :3000"
-echo "[cube-container] WebUI at :12088"
-echo "[cube-container] MCP server available (stdio)"
+
+# Start MCP HTTP server (auth middleware, RBAC, rate limiting, audit chain)
+echo "[cube-container] Starting MCP HTTP server..."
+cube-mcp --mode http --port 8080 &
+
+# Wait for MCP server to be ready
+for i in $(seq 1 10); do
+    curl -sf http://localhost:8080/health >/dev/null 2>&1 && break
+    sleep 0.5
+done
+
+echo "[cube-container] MCP server ready at :8080 (behind Caddy proxy)"
+
+# Start Caddy (TLS, WAF, security headers, rate limiting)
+echo "[cube-container] Starting Caddy reverse proxy..."
+caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+
+echo "[cube-container] All services started."
+echo "[cube-container]   CubeAPI:  http://localhost:3000"
+echo "[cube-container]   MCP:      http://localhost:8080 (internal)"
+echo "[cube-container]   Caddy:    :80/:443 (public TLS)"
+echo "[cube-container]   WebUI:    served via Caddy"
 
 # Keep container alive
 wait

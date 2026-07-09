@@ -10,18 +10,19 @@ jobs:
   mcp-server:
     name: MCP Server (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.25"]
+        go: ["1.25.12"]
     defaults:
       run:
         working-directory: mcp-server-go
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ matrix.go }}
           cache-dependency-path: mcp-server-go/go.sum
@@ -64,14 +65,15 @@ jobs:
   go-build:
     name: Go Components (Cubelet + CubeMaster)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         component: [Cubelet, CubeMaster]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: ${{ matrix.component }}/go.mod
           cache-dependency-path: ${{ matrix.component }}/go.sum
@@ -88,12 +90,7 @@ jobs:
 
       - name: Vet (non-blocking, upstream code has pre-existing warnings)
         working-directory: ${{ matrix.component }}
-        # AUDIT FIX H-08: Changed from continue-on-error + total suppression
-        # (2>/dev/null || true) to actually running vet and reporting warnings.
-        # We still allow warnings for upstream Tencent code but no longer hide them.
         run: |
-          # Vet packages we own/modified — upstream Tencent code has pre-existing
-          # vet warnings that we track as known issues but don't suppress.
           go vet ./cmd/... ./pkg/cubecow/... 2>&1 | head -50 || {
             echo "::warning::go vet found issues in upstream code (non-blocking for forked components)"
             exit 0
@@ -102,8 +99,9 @@ jobs:
   docker-build:
     name: Docker Image Build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Build image (standard docker build)
         run: |
@@ -114,44 +112,51 @@ jobs:
   security-checks:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Gosec (Go SAST)
-        uses: securego/gosec@master
+        uses: securego/gosec@a20bf87f7e2a0f5b4fa8f24c5fbe59e1e86d7670 # v2.22.5
         with:
           args: -fmt sarif -out gosec-results.sarif -exclude-dir=Cubelet -exclude-dir=CubeMaster ./mcp-server-go/...
-        # AUDIT FIX H-07: Removed continue-on-error — SAST findings now gate merges
 
       - name: Govulncheck (MCP server only)
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@b625fbe2de9d2cd31c6c2d33fb5afb0dae82fc2d # v1
         with:
-          go-version-input: "1.25"
+          go-version-input: "1.25.12"
           work-dir: mcp-server-go
-        # AUDIT FIX H-07: Removed continue-on-error — known CVEs now gate merges
 
-      - name: Upload SARIF
+      - name: Govulncheck SARIF
+        run: |
+          cd mcp-server-go && go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck -format sarif ./... > ../govulncheck.sarif || true
+
+      - name: Upload Gosec SARIF
         if: always() && hashFiles('gosec-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@dd63f6f9c61b08f4f4a0fa06f511c4c4cc186035 # v3
         with:
           sarif_file: gosec-results.sarif
+
+      - name: Upload Govulncheck SARIF
+        if: always() && hashFiles('govulncheck.sarif') != ''
+        uses: github/codeql-action/upload-sarif@dd63f6f9c61b08f4f4a0fa06f511c4cc186035 # v3
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck
 
   binary-guard:
     name: No Binaries in Repo
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Detect committed binaries
         run: |
-          # Check for ELF/PE/Mach-O files in tracked source directories
-          # AUDIT FIX C-02: Expanded scan to include Cubelet/ root (not just Cubelet/cmd/)
-          # and CubeMaster/ root — the 93MB cubelet binary lived in Cubelet/ undetected.
-          # Only detect real compiled binaries (ELF/Mach-O/PE32), NOT text scripts
-          # (.sh, .py) that merely have execute permission.
           FOUND=0
           for dir in mcp-server-go Cubelet CubeMaster cubelog deploy; do
             if [ -d "$dir" ]; then
@@ -163,11 +168,9 @@ jobs:
                     FOUND=1
                     ;;
                   *executable*)
-                    # Only flag "executable" if NOT a text/script file.
-                    # file reports "executable" for .sh/.py with +x perms.
                     case "$TYPE" in
                       *text*|*script*|*ASCII*|*UTF-8*)
-                        ;; # text script — skip
+                        ;;
                       *)
                         echo "::error file=$f::Binary executable detected: $f"
                         FOUND=1

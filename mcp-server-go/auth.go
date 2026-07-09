@@ -931,9 +931,11 @@ func (c *trackedConn) Close() error {
 }
 
 // ipFromAddr extracts the IP portion from a host:port address string.
+// Uses net.SplitHostPort for correct IPv6 handling (e.g. [::1]:8080 → ::1).
 func ipFromAddr(addr string) string {
-	if idx := strings.LastIndex(addr, ":"); idx >= 0 {
-		return addr[:idx]
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
 	}
-	return addr
+	return host
 }
