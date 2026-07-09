@@ -93,19 +93,22 @@ func (cm *CertificateManager) List() (*CertListResult, error) {
 		}
 	}
 
-	// Method 2: Also check CUBE_TLS_CERT if set (manual TLS)
+	// Method 2: Also check CUBE_TLS_CERT if set (manual TLS) — B6 fix: validate path
 	if certFile := os.Getenv("CUBE_TLS_CERT"); certFile != "" {
-		if cert := cm.parseCertFile(certFile, "manual"); cert != nil {
-			// Avoid duplicates
-			found := false
-			for _, existing := range result.Certificates {
-				if existing.Domain == cert.Domain {
-					found = true
-					break
+		certDir := filepath.Dir(certFile)
+		if _, err := validatePathSafe(certFile, certDir); err == nil {
+			if cert := cm.parseCertFile(certFile, "manual"); cert != nil {
+				// Avoid duplicates
+				found := false
+				for _, existing := range result.Certificates {
+					if existing.Domain == cert.Domain {
+						found = true
+						break
+					}
 				}
-			}
-			if !found {
-				result.Certificates = append(result.Certificates, *cert)
+				if !found {
+					result.Certificates = append(result.Certificates, *cert)
+				}
 			}
 		}
 	}

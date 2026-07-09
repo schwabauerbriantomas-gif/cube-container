@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -146,6 +147,9 @@ func (nm *NotificationManager) AddChannel(ch *NotificationChannel) error {
 	if ch.Type == ChannelTelegram {
 		if ch.BotToken == "" || ch.ChatID == "" {
 			return fmt.Errorf("bot_token and chat_id are required for telegram channels")
+		}
+		if err := validateTelegramToken(ch.BotToken); err != nil {
+			return err
 		}
 	}
 	if ch.Type == ChannelEmail {
@@ -294,6 +298,20 @@ func validateChannelType(t ChannelType) error {
 		return nil
 	}
 	return fmt.Errorf("invalid channel type: %s (must be slack, discord, telegram, or email)", t)
+}
+
+// telegramTokenPattern validates Telegram bot tokens: <bot_id>:<35-char-hash>
+// H9 fix: prevents SSRF via malformed bot tokens that could redirect requests.
+var telegramTokenPattern = regexp.MustCompile(`^[0-9]{8,12}:[A-Za-z0-9_-]{30,40}$`)
+
+func validateTelegramToken(token string) error {
+	if token == "" {
+		return fmt.Errorf("bot_token is required for telegram channels")
+	}
+	if !telegramTokenPattern.MatchString(token) {
+		return fmt.Errorf("invalid telegram bot token format (expected <bot_id>:<hash>)")
+	}
+	return nil
 }
 
 // urlExists is a helper to validate URLs have proper format.

@@ -90,29 +90,34 @@ func newDatabaseManager() *DatabaseManager {
 // ---- Defaults per DB type ----
 
 var dbDefaults = map[DBType]struct {
-	Image   string
-	Port    int
-	EnvVars []string
+	Image    string
+	Port     int
+	EnvVars  []string
+	MountDir string // H10 fix: per-type data directory
 }{
 	DBPostgres: {
-		Image: "postgres:16-alpine",
-		Port:  5432,
-		EnvVars: []string{"POSTGRES_DB=app", "POSTGRES_USER=app"},
+		Image:    "postgres:16-alpine",
+		Port:     5432,
+		EnvVars:  []string{"POSTGRES_DB=app", "POSTGRES_USER=app"},
+		MountDir: "/var/lib/postgresql/data",
 	},
 	DBMySQL: {
-		Image: "mysql:8",
-		Port:  3306,
-		EnvVars: []string{"MYSQL_DATABASE=app", "MYSQL_USER=app"},
+		Image:    "mysql:8",
+		Port:     3306,
+		EnvVars:  []string{"MYSQL_DATABASE=app", "MYSQL_USER=app"},
+		MountDir: "/var/lib/mysql",
 	},
 	DBRedis: {
-		Image: "redis:7-alpine",
-		Port:  6379,
-		EnvVars: []string{},
+		Image:    "redis:7-alpine",
+		Port:     6379,
+		EnvVars:  []string{},
+		MountDir: "/data",
 	},
 	DBMongoDB: {
-		Image: "mongo:7",
-		Port:  27017,
-		EnvVars: []string{},
+		Image:    "mongo:7",
+		Port:     27017,
+		EnvVars:  []string{},
+		MountDir: "/data/db",
 	},
 }
 
@@ -244,9 +249,9 @@ func (dm *DatabaseManager) Create(params DatabaseCreateParams) (*DatabaseInstanc
 	container, _ := containerResp.(map[string]interface{})
 	containerID, _ := container["id"].(string)
 
-	// Attach the volume
+	// Attach the volume — H10 fix: use per-type mount path
 	if volumeMgr != nil && containerID != "" {
-		_, _ = volumeMgr.VolumeAttach(containerID, volName, "/var/lib/postgresql/data") // simplified mount path
+		_, _ = volumeMgr.VolumeAttach(containerID, volName, defaults.MountDir)
 	}
 
 	// Store password as a secret
@@ -284,6 +289,9 @@ func (dm *DatabaseManager) Create(params DatabaseCreateParams) (*DatabaseInstanc
 		PasswordSecret: secretName,
 		CreatedAt:     time.Now().UTC(),
 		Status:        "running",
+		// H11 NOTE: network isolation requires ContainerBackend.CreateNetwork()
+		// which is not yet implemented. DB containers share the default bridge
+		// network until network isolation is added to the backend interface.
 	}
 	dm.dbs[id] = instance
 	if err := dm.saveToDisk(); err != nil {

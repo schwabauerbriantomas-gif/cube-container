@@ -288,7 +288,7 @@ func parseLogLines(containerID string, raw interface{}) []LogLine {
 			ContainerID: containerID,
 			Message:     line,
 			Level:       detectLevel(line),
-			Timestamp:   time.Now().UTC().Format(time.RFC3339), // best effort
+			Timestamp:   time.Now().UTC().Format(time.RFC3339), // B7: best-effort, no original timestamp from logs
 		})
 	}
 	return lines

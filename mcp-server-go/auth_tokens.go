@@ -79,14 +79,14 @@ func listTokens() (*ListTokensResult, error) {
 		return nil, fmt.Errorf("auth key store is not initialized")
 	}
 
-	keyStore.mu.RLock()
-	defer keyStore.mu.RUnlock()
+	// M10 fix: use the public List() method instead of accessing internal mutex
+	keys := keyStore.List()
 
 	result := &ListTokensResult{
 		Tokens: []TokenInfo{},
 	}
 
-	for _, k := range keyStore.keys {
+	for _, k := range keys {
 		result.Tokens = append(result.Tokens, TokenInfo{
 			Key:       k.Key,
 			Role:      string(k.Role),

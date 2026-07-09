@@ -127,6 +127,11 @@ func (jm *JobManager) Create(name, schedule, toolName string, args map[string]in
 	if _, ok := toolPermissions[toolName]; !ok {
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
 	}
+	// M9 fix: block privileged tools from being scheduled — prevents escalation
+	// via job_create(job, tool=auth_revoke_token) or self-deletion via auth_create_token.
+	if strings.HasPrefix(toolName, "auth_") || toolName == "job_create" || toolName == "job_remove" {
+		return nil, fmt.Errorf("tool '%s' cannot be scheduled as a job for security reasons", toolName)
+	}
 
 	id := generateID("job")
 	job := &Job{

@@ -130,12 +130,16 @@ func newImageManager(b ContainerBackend) *ImageManager {
 
 // BuildImage creates a Docker image from a Dockerfile in contextDir.
 // It tarballs the context directory and sends it to the Docker build API.
+// maxBuildContextBytes limits the build context tarball to prevent OOM (M8).
+const maxBuildContextBytes = 500 * 1024 * 1024 // 500MB
+
 func (im *ImageManager) BuildImage(ctx context.Context, contextDir, dockerfile, tag string) (*ImageBuildResult, error) {
-	absDir, err := validatePathSafe(contextDir, "/")
+	// C7 fix: restrict context dir to a workspace root, not the entire filesystem.
+	buildRoot := envOr("CUBE_BUILD_ROOT", "/tmp/cube-builds")
+	absDir, err := validatePathSafe(contextDir, buildRoot)
 	if err != nil {
-		return nil, fmt.Errorf("invalid context dir: %w", err)
+		return nil, fmt.Errorf("context dir must be under %s: %w", buildRoot, err)
 	}
-	_ = absDir // already resolved below
 	if tag != "" {
 		if err := validateImageRef(tag); err != nil {
 			return nil, err
@@ -143,12 +147,6 @@ func (im *ImageManager) BuildImage(ctx context.Context, contextDir, dockerfile, 
 	}
 	if dockerfile == "" {
 		dockerfile = "Dockerfile"
-	}
-
-	// Resolve absolute path
-	absDir, err = filepath.Abs(contextDir)
-	if err != nil {
-		return nil, fmt.Errorf("cannot resolve context dir: %w", err)
 	}
 
 	// Check the context directory exists and is a directory
@@ -166,10 +164,11 @@ func (im *ImageManager) BuildImage(ctx context.Context, contextDir, dockerfile, 
 		return nil, fmt.Errorf("dockerfile not found: %w", err)
 	}
 
-	// Tarball the build context
+	// Tarball the build context with size limit (M8 fix)
 	var tarBuf bytes.Buffer
 	tw := tar.NewWriter(&tarBuf)
 
+	var totalSize int64
 	err = filepath.Walk(absDir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -177,6 +176,17 @@ func (im *ImageManager) BuildImage(ctx context.Context, contextDir, dockerfile, 
 		// Skip the root dir itself
 		if path == absDir {
 			return nil
+		}
+		// Skip symlinks to prevent escaping the build root
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		// Enforce size limit
+		if fi.Mode().IsRegular() {
+			totalSize += fi.Size()
+			if totalSize > maxBuildContextBytes {
+				return fmt.Errorf("build context exceeds %d bytes limit (CUBE_BUILD_ROOT files too large)", maxBuildContextBytes)
+			}
 		}
 		// Create tar header
 		relPath, err := filepath.Rel(absDir, path)
