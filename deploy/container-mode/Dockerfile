@@ -1,6 +1,6 @@
 # Dockerfile for Cube Container — Single Node (Container Mode)
 #
-# Builds CubeAPI (Rust), CubeMaster + Cubelet (Go), and MCP server (Python)
+# Builds CubeAPI (Rust), CubeMaster + Cubelet (Go), and MCP server (Go)
 # into a single image for testing and deployment on low-resource nodes.
 #
 # Build:
@@ -11,8 +11,11 @@
 #     --privileged \
 #     -v /var/lib/containerd:/var/lib/containerd \
 #     -v /var/lib/cube-container:/var/lib/cube-container \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
 #     -p 3000:3000 \
-#     -p 12088:12088 \
+#     -p 8080:8080 \
+#     -p 80:80 \
+#     -p 443:443 \
 #     cube-container:latest
 
 # ---- Stage 1: Build Go components ----
@@ -55,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables \
     ca-certificates \
     git \
+    caddy \
     && rm -rf /var/lib/apt/lists/*
 
 # Binaries from builders
@@ -68,10 +72,14 @@ COPY --from=mcp-builder /cube-mcp /usr/local/bin/cube-mcp
 # Config
 COPY deploy/container-mode/config.toml /etc/cube-container/config.toml
 
+# Caddy base config — imports dynamically generated route fragments
+RUN mkdir -p /etc/caddy
+RUN echo 'import /etc/caddy/cube-routes.caddy' > /etc/caddy/Caddyfile
+
 # Entrypoint script
 COPY deploy/container-mode/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 3000 12088
+EXPOSE 3000 8080 80 443
 
 ENTRYPOINT ["/entrypoint.sh"]
