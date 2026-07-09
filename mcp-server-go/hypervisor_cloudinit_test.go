@@ -4,13 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+// skipIfNoLibvirt skips tests that require libvirt directories and permissions.
+func skipIfNoLibvirt(t *testing.T) {
+	t.Helper()
+	if err := os.MkdirAll("/var/lib/libvirt/seeds", 0755); err != nil {
+		t.Skipf("skipping: cannot create /var/lib/libvirt/seeds (no permissions): %v", err)
+	}
+}
+
+// skipIfNoCloudImageUtils skips tests that require cloud-image-utils or genisoimage.
+func skipIfNoCloudImageUtils(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"cloud-localds", "genisoimage", "mkisofs"} {
+		if _, err := exec.LookPath(tool); err == nil {
+			return
+		}
+	}
+	t.Skip("skipping: no cloud-init ISO tool found (cloud-localds, genisoimage, or mkisofs)")
+}
+
 func TestCloudInitCreateReal(t *testing.T) {
+	skipIfNoLibvirt(t)
+	skipIfNoCloudImageUtils(t)
+
 	ctx := context.Background()
 
 	req := mcp.CallToolRequest{}
@@ -80,11 +103,20 @@ func TestCloudInitCreateReal(t *testing.T) {
 func TestTemplateListReal(t *testing.T) {
 	ctx := context.Background()
 
-	// Create some test files
-	os.MkdirAll(defaultImageDir, 0755)
-	os.WriteFile(defaultImageDir+"/ubuntu-22.04.qcow2", []byte("fake"), 0644)
-	os.WriteFile(defaultImageDir+"/alpine-cloud.img", []byte("fake"), 0644)
-	os.WriteFile(defaultImageDir+"/ubuntu-22.04-seed.iso", []byte("fake"), 0644)
+	// Try to create test files in defaultImageDir; skip if no permissions
+	if err := os.MkdirAll(defaultImageDir, 0755); err != nil {
+		t.Skipf("skipping: cannot create %s (no permissions): %v", defaultImageDir, err)
+	}
+
+	// Create test files
+	if err := os.WriteFile(defaultImageDir+"/cube-ci-test-ubuntu.qcow2", []byte("fake"), 0644); err != nil {
+		t.Skipf("skipping: cannot write to %s (no permissions): %v", defaultImageDir, err)
+	}
+	defer os.Remove(defaultImageDir + "/cube-ci-test-ubuntu.qcow2")
+	os.WriteFile(defaultImageDir+"/cube-ci-test-alpine.img", []byte("fake"), 0644)
+	defer os.Remove(defaultImageDir + "/cube-ci-test-alpine.img")
+	os.WriteFile(defaultImageDir+"/cube-ci-test-seed.iso", []byte("fake"), 0644)
+	defer os.Remove(defaultImageDir + "/cube-ci-test-seed.iso")
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "vm_template_list"
@@ -105,22 +137,22 @@ func TestTemplateListReal(t *testing.T) {
 			for _, tpl := range data.Templates {
 				t.Logf("  %s (%dMB) %s", tpl.Name, tpl.SizeMB, tpl.ModifiedAt)
 			}
+			// We added 3 files but there might be pre-existing ones; check >= 3
 			if data.Total < 3 {
 				t.Errorf("expected >= 3 templates, got %d", data.Total)
 			}
 		}
 	}
-
-	// Cleanup test files
-	os.Remove(defaultImageDir + "/ubuntu-22.04.qcow2")
-	os.Remove(defaultImageDir + "/alpine-cloud.img")
-	os.Remove(defaultImageDir + "/ubuntu-22.04-seed.iso")
 }
 
 func TestCreateCloudInitISO(t *testing.T) {
+	skipIfNoCloudImageUtils(t)
+
 	// Test the ISO creation directly
-	tmpDir := "/tmp/cube-ci-test"
-	os.MkdirAll(tmpDir, 0755)
+	tmpDir, err := os.MkdirTemp("", "cube-ci-iso-*")
+	if err != nil {
+		t.Skipf("skipping: cannot create temp dir: %v", err)
+	}
 	defer os.RemoveAll(tmpDir)
 
 	// Create test files
@@ -128,7 +160,7 @@ func TestCreateCloudInitISO(t *testing.T) {
 	os.WriteFile(tmpDir+"/meta-data", []byte("instance-id: test\n"), 0644)
 
 	isoPath := tmpDir + "/test-seed.iso"
-	err := createCloudInitISO(tmpDir, isoPath)
+	err = createCloudInitISO(tmpDir, isoPath)
 	if err != nil {
 		t.Fatalf("createCloudInitISO failed: %v", err)
 	}

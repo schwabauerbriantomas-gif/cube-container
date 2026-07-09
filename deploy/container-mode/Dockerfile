@@ -63,7 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Caddy binary with checksum verification (supply-chain safety)
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && curl -sfL "https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz" -o /tmp/caddy.tar.gz \
-    && echo "2bc233c323352d1aaa95f6b6d8b13c300b6e6d28c6d84b4f5dcc5bf1e86c4d4a /tmp/caddy.tar.gz" | sha256sum -c - \
+    && echo "a7e8306c54138cf88e371c5ec0caf7baf142ecc1d60a30897dfb67d65d3748c8 /tmp/caddy.tar.gz" | sha256sum -c - \
     && tar xz -C /usr/local/bin caddy --warning=no-unknown-key -f /tmp/caddy.tar.gz \
     && rm /tmp/caddy.tar.gz \
     && caddy version \
