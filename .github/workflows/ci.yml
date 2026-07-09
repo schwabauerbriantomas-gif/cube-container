@@ -118,10 +118,10 @@ jobs:
         continue-on-error: true
 
       - name: Upload SARIF
-        if: always()
+        if: always() && hashFiles('gosec-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: .
+          sarif_file: gosec-results.sarif
 
   binary-guard:
     name: No Binaries in Repo

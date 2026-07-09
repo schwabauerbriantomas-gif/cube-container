@@ -1,0 +1,12 @@
+# Compiled binary
+mcp-server-go
+
+# Test artifacts
+*.out
+*.test
+*.prof
+
+# IDE
+.idea/
+.vscode/
+*.swp
