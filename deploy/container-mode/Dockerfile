@@ -36,7 +36,7 @@ RUN cd CubeMaster && CGO_ENABLED=0 go build -o /cubemaster ./cmd/cubemaster
 RUN cd CubeMaster && CGO_ENABLED=0 go build -o /cubemastercli ./cmd/cubemastercli
 
 # ---- Stage 2: Build CubeAPI (Rust) ----
-FROM rust:1.77-bookworm AS rust-builder
+FROM rust:1.97-bookworm AS rust-builder
 
 WORKDIR /workspace
 COPY CubeAPI/ ./CubeAPI/
