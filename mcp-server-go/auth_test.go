@@ -250,7 +250,7 @@ func TestExtractAuthHeaders(t *testing.T) {
 	r1 := mustNewRequest("POST", "/mcp", nil)
 	r1.Header.Set("X-API-Key", "cc_live_test")
 	r1.Header.Set("X-API-Secret", "sec_test")
-	k1, s1 := extractAuth(r1)
+	k1, s1, _ := extractAuth(r1)
 	if k1 != "cc_live_test" || s1 != "sec_test" {
 		t.Fatalf("custom header extraction failed: key='%s' secret='%s'", k1, s1)
 	}
@@ -258,14 +258,14 @@ func TestExtractAuthHeaders(t *testing.T) {
 	// Bearer token
 	r2 := mustNewRequest("POST", "/mcp", nil)
 	r2.Header.Set("Authorization", "Bearer cc_live_test:sec_test")
-	k2, s2 := extractAuth(r2)
+	k2, s2, _ := extractAuth(r2)
 	if k2 != "cc_live_test" || s2 != "sec_test" {
 		t.Fatalf("bearer token extraction failed: key='%s' secret='%s'", k2, s2)
 	}
 
 	// No auth
 	r3 := mustNewRequest("POST", "/mcp", nil)
-	k3, s3 := extractAuth(r3)
+	k3, s3, _ := extractAuth(r3)
 	if k3 != "" || s3 != "" {
 		t.Fatal("expected empty auth for no headers")
 	}

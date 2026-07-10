@@ -89,6 +89,9 @@ func main() {
 	versionMgr = newVersionManager(deploy)
 	netMgr = newNetworkManager()
 
+	// Proxmox VE backend — initialized from env vars (optional)
+	initProxmoxBackend()
+
 	// Health check manager — runs probes and auto-restarts failed containers
 	healthMgr = newHealthManager(client)
 

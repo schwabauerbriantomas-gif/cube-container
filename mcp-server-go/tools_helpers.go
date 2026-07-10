@@ -81,6 +81,20 @@ func argStringSlice(args map[string]interface{}, key string) []string {
 	return nil
 }
 
+func argBool(args map[string]interface{}, key string) bool {
+	if v, ok := args[key]; ok {
+		switch b := v.(type) {
+		case bool:
+			return b
+		case string:
+			return b == "true" || b == "1"
+		case float64:
+			return b != 0
+		}
+	}
+	return false
+}
+
 func argIntSlice(args map[string]interface{}, key string) []int {
 	if v, ok := args[key].([]interface{}); ok {
 		result := make([]int, 0, len(v))

@@ -232,6 +232,25 @@ var toolPermissions = map[string]Role{
 	"vm_cloudinit_create":    RoleOperator,
 	"vm_template_list":       RoleViewer,
 	"vm_create_from_template": RoleOperator,
+	// TOTP / 2FA — admin to enroll/disable, admin to check status
+	"totp_enroll":   RoleAdmin,
+	"totp_confirm":  RoleAdmin,
+	"totp_disable":  RoleAdmin,
+	"totp_status":   RoleAdmin,
+	// Proxmox VE — viewer to list, admin to create/delete/migrate, operator to start/stop/snapshot
+	"pve_list_vms":         RoleViewer,
+	"pve_get_vm":           RoleViewer,
+	"pve_create_vm":        RoleAdmin,
+	"pve_start_vm":         RoleOperator,
+	"pve_stop_vm":          RoleOperator,
+	"pve_delete_vm":        RoleAdmin,
+	"pve_migrate_vm":       RoleAdmin,
+	"pve_list_snapshots":   RoleViewer,
+	"pve_create_snapshot":  RoleOperator,
+	"pve_restore_snapshot": RoleAdmin,
+	"pve_delete_snapshot":  RoleAdmin,
+	"pve_list_storage":     RoleViewer,
+	"pve_list_nodes":       RoleViewer,
 }
 
 // roleLevel returns a numeric level for comparison (higher = more permissions).
@@ -264,14 +283,15 @@ func canExecute(role Role, toolName string) bool {
 // secret is NEVER persisted to disk — it is only returned once in GenerateKey.
 // The Secret field is used only in-memory for the initial response, then cleared.
 type APIKey struct {
-	Key        string    `json:"key"`
-	Secret     string    `json:"-"`              // in-memory only, never serialized
-	SecretHash string    `json:"secret_hash"`    // SHA-256 hash persisted to disk
-	Role       Role      `json:"role"`
-	Label      string    `json:"label"`
-	CreatedAt  time.Time `json:"created_at"`
-	LastUsed   time.Time `json:"last_used"`
-	Disabled   bool      `json:"disabled"`
+	Key         string    `json:"key"`
+	Secret      string    `json:"-"`
+	SecretHash  string    `json:"secret_hash"`     // SHA-256 hash persisted to disk
+	Role        Role      `json:"role"`
+	Label       string    `json:"label"`
+	CreatedAt   time.Time `json:"created_at"`
+	LastUsed    time.Time `json:"last_used"`
+	Disabled    bool      `json:"disabled"`
+	TOTPEnabled bool      `json:"totp_enabled"`    // TOTP second factor is active for this key
 }
 
 // KeyStore manages API keys with file persistence.
@@ -279,12 +299,14 @@ type KeyStore struct {
 	mu       sync.RWMutex
 	keys     map[string]*APIKey
 	filePath string
+	totp     *TOTPStore // TOTP second-factor store (optional)
 }
 
 func newKeyStore() *KeyStore {
 	ks := &KeyStore{
 		keys:     make(map[string]*APIKey),
 		filePath: envOr("CUBE_AUTH_KEYS_FILE", "/var/lib/cube-container/auth-keys.json"),
+		totp:     newTOTPStore(),
 	}
 	ks.load()
 	return ks
@@ -361,6 +383,8 @@ func (ks *KeyStore) GenerateKey(role Role, label string) (*APIKey, error) {
 // Uses constant-time comparisons throughout to prevent timing attacks (B1).
 // AUDIT FIX H-02: Compares hash(provided_secret) with stored SecretHash instead
 // of comparing plaintext secrets. The plaintext is never on disk.
+// TOTP: If the key has TOTP enabled, the caller must also provide a valid
+// TOTP code via ValidateWithTOTP or the X-TOTP header.
 func (ks *KeyStore) Validate(key, secret string) (*APIKey, error) {
 	ks.mu.RLock()
 	k, exists := ks.keys[key]
@@ -384,6 +408,85 @@ func (ks *KeyStore) Validate(key, secret string) (*APIKey, error) {
 	ks.mu.Unlock()
 
 	return k, nil
+}
+
+// ValidateWithTOTP validates an API key + secret + optional TOTP code.
+// If the key has TOTPEnabled, the totpCode must be valid.
+// If the tool being called is in the totpRequiredTools set, TOTP is
+// required even if TOTPEnabled is false (but only if the key has a
+// TOTP secret enrolled — otherwise the operation is blocked).
+func (ks *KeyStore) ValidateWithTOTP(key, secret, totpCode string, toolName string) (*APIKey, error) {
+	apiKey, err := ks.Validate(key, secret)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if TOTP is needed
+	needTOTP := false
+	if apiKey.TOTPEnabled {
+		needTOTP = true
+	}
+	if IsTOTPRequired(toolName) && ks.totp.HasTOTP(apiKey.Key) {
+		needTOTP = true
+	}
+
+	if needTOTP {
+		if totpCode == "" {
+			return nil, fmt.Errorf("TOTP code required for this operation")
+		}
+		if !ks.totp.Verify(apiKey.Key, totpCode) {
+			return nil, fmt.Errorf("invalid TOTP code")
+		}
+	}
+
+	return apiKey, nil
+}
+
+// EnableTOTP enrolls a new TOTP secret for a key.
+// Returns the base32 secret and otpauth:// URL for QR code generation.
+// The caller must verify a code with VerifyTOTPEnrollment before TOTP
+// is actually activated.
+func (ks *KeyStore) EnableTOTP(keyID, accountName string) (string, string, error) {
+	ks.mu.RLock()
+	k, exists := ks.keys[keyID]
+	ks.mu.RUnlock()
+	if !exists {
+		return "", "", fmt.Errorf("key not found")
+	}
+	if k.TOTPEnabled {
+		return "", "", fmt.Errorf("TOTP already enabled for this key")
+	}
+	return ks.totp.Enroll(keyID, sanitizeAccountName(accountName))
+}
+
+// ConfirmTOTPEnrollment verifies the first TOTP code and activates TOTP.
+func (ks *KeyStore) ConfirmTOTPEnrollment(keyID, code string) error {
+	if !ks.totp.Verify(keyID, code) {
+		return fmt.Errorf("invalid TOTP code — enrollment not confirmed")
+	}
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	k, exists := ks.keys[keyID]
+	if !exists {
+		return fmt.Errorf("key not found")
+	}
+	k.TOTPEnabled = true
+	ks.saveLocked()
+	return nil
+}
+
+// DisableTOTP removes TOTP from a key.
+func (ks *KeyStore) DisableTOTP(keyID string) error {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	k, exists := ks.keys[keyID]
+	if !exists {
+		return fmt.Errorf("key not found")
+	}
+	k.TOTPEnabled = false
+	ks.totp.Remove(keyID)
+	ks.saveLocked()
+	return nil
 }
 
 // Revoke disables an API key.
@@ -620,16 +723,17 @@ func newAuthMiddleware(keys *KeyStore, limiter *rateLimiter, audit *AuditLogger)
 	}
 }
 
-// extractAuth pulls API key and secret from request headers.
+// extractAuth pulls API key, secret, and optional TOTP code from request headers.
 // Supports two formats:
-//   X-API-Key: cc_live_xxx  +  X-API-Secret: sec_yyy
-//   Authorization: Bearer cc_live_xxx:sec_yyy
-func extractAuth(r *http.Request) (key, secret string) {
+//   X-API-Key: ***  +  X-API-Secret: sec_yyy  +  X-TOTP: 123456 (optional)
+//   Authorization: Bearer cc_liv..._yyy
+func extractAuth(r *http.Request) (key, secret, totpCode string) {
 	// Try custom headers first
 	key = r.Header.Get("X-API-Key")
 	secret = r.Header.Get("X-API-Secret")
+	totpCode = r.Header.Get("X-TOTP")
 	if key != "" && secret != "" {
-		return key, secret
+		return key, secret, totpCode
 	}
 	// Fall back to Bearer token: "key:secret"
 	auth := r.Header.Get("Authorization")
@@ -637,10 +741,10 @@ func extractAuth(r *http.Request) (key, secret string) {
 		token := strings.TrimPrefix(auth, "Bearer ")
 		parts := strings.SplitN(token, ":", 2)
 		if len(parts) == 2 {
-			return parts[0], parts[1]
+			return parts[0], parts[1], totpCode
 		}
 	}
-	return "", ""
+	return "", "", ""
 }
 
 // Wrap returns an http.Handler that enforces auth + RBAC + rate limit + audit.
@@ -650,13 +754,19 @@ func (am *AuthMiddleware) Wrap(next http.Handler, toolExtractor func(*http.Reque
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		key, secret := extractAuth(r)
+		key, secret, totpCode := extractAuth(r)
 		statusCode := 200
 		allowed := true
 		reason := ""
 
-		// Authenticate
-		apiKey, err := am.keys.Validate(key, secret)
+		// Extract tool name early for TOTP check (needed before auth)
+		toolName := ""
+		if toolExtractor != nil {
+			toolName = toolExtractor(r)
+		}
+
+		// Authenticate with TOTP support
+		apiKey, err := am.keys.ValidateWithTOTP(key, secret, totpCode, toolName)
 		if err != nil {
 			statusCode = 401
 			allowed = false
@@ -687,20 +797,16 @@ func (am *AuthMiddleware) Wrap(next http.Handler, toolExtractor func(*http.Reque
 			return
 		}
 
-		// RBAC: extract tool name and check permission
-		toolName := ""
-		if toolExtractor != nil {
-			toolName = toolExtractor(r)
-			// R8-M02: fail-closed — if we can't extract a tool name from a tools/call
-			// request, reject it rather than letting mcp-go process it without authorization.
-			if toolName == "" && isToolsCallRequest(r) {
-				statusCode = 403
-				allowed = false
-				reason = "failed to extract tool name from request — RBAC check cannot be skipped"
-				writeJSONError(w, statusCode, reason)
-				am.logAudit(start, key, string(apiKey.Role), r, statusCode, allowed, reason, "")
-				return
-			}
+		// RBAC: check permission for the extracted tool name
+		// R8-M02: fail-closed — if we can't extract a tool name from a tools/call
+		// request, reject it rather than letting mcp-go process it without authorization.
+		if toolExtractor != nil && toolName == "" && isToolsCallRequest(r) {
+			statusCode = 403
+			allowed = false
+			reason = "failed to extract tool name from request — RBAC check cannot be skipped"
+			writeJSONError(w, statusCode, reason)
+			am.logAudit(start, key, string(apiKey.Role), r, statusCode, allowed, reason, "")
+			return
 		}
 		if toolName != "" && !canExecute(apiKey.Role, toolName) {
 			statusCode = 403
@@ -880,8 +986,8 @@ func (a *AuthAdminAPI) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 // is insufficient.
 func (am *AuthMiddleware) RequireRole(next http.Handler, required Role) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key, secret := extractAuth(r)
-		apiKey, err := am.keys.Validate(key, secret)
+		key, secret, totpCode := extractAuth(r)
+		apiKey, err := am.keys.ValidateWithTOTP(key, secret, totpCode, "")
 		if err != nil {
 			writeJSONError(w, 401, err.Error())
 			return

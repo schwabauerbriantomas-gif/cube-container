@@ -647,4 +647,77 @@ func registerAllTools(s *server.MCPServer) {
 		mcp.WithNumber("memory_mb", mcp.Description("Memory in MB (default 2048)")),
 		mcp.WithNumber("disk_gb", mcp.Description("Disk size in GB (default 20)")),
 	), handleVMCreateFromTemplate)
+
+	// ── TOTP / 2FA (4) — Steam Guard style second factor ───────────────
+	registerTool(s, toolWithArgs("totp_enroll", "Start TOTP enrollment for an API key. Returns a base32 secret and an otpauth:// URL for QR code generation. Scan the QR with Google/Microsoft Authenticator, then call totp_confirm with the first 6-digit code. Args: key_id (required), account_name (for QR label).",
+		mcp.WithString("key_id", mcp.Required(), mcp.Description("API key ID to enroll")),
+		mcp.WithString("account_name", mcp.Description("Account name for the authenticator app")),
+	), handleTOTPEnroll)
+	registerTool(s, toolWithArgs("totp_confirm", "Confirm TOTP enrollment by entering the first 6-digit code from the authenticator app. This activates TOTP for the key — all future API calls will require X-TOTP header.",
+		mcp.WithString("key_id", mcp.Required()),
+		mcp.WithString("code", mcp.Required(), mcp.Description("6-digit TOTP code from authenticator app")),
+	), handleTOTPConfirm)
+	registerTool(s, toolWithArgs("totp_disable", "Disable TOTP for an API key. The key will no longer require a TOTP code.",
+		mcp.WithString("key_id", mcp.Required()),
+	), handleTOTPDisable)
+	registerTool(s, toolWithArgs("totp_status", "Check TOTP enrollment status for an API key.",
+		mcp.WithString("key_id", mcp.Required()),
+	), handleTOTPStatus)
+
+	// ── Proxmox VE backend (13) — manage remote PVE cluster via REST API ─
+	registerTool(s, tool("pve_list_vms", "List all VMs on the Proxmox VE cluster. Requires CUBE_PROXMOX_HOST and CUBE_PROXMOX_TOKEN to be set."), handlePVEListVMs)
+	registerTool(s, toolWithArgs("pve_get_vm", "Get details for a specific VM on Proxmox VE.",
+		mcp.WithNumber("vmid", mcp.Required(), mcp.Description("VM ID")),
+		mcp.WithString("node", mcp.Description("Node name (defaults to CUBE_PROXMOX_NODE)")),
+	), handlePVEGetVM)
+	registerTool(s, toolWithArgs("pve_create_vm", "Create a new VM on Proxmox VE.",
+		mcp.WithString("name", mcp.Required(), mcp.Description("VM name")),
+		mcp.WithNumber("vmid", mcp.Description("VM ID (auto-assigned if omitted)")),
+		mcp.WithString("node", mcp.Description("Target node")),
+		mcp.WithNumber("memory_mb", mcp.Description("Memory in MB (default 512)")),
+		mcp.WithNumber("cores", mcp.Description("CPU cores (default 2)")),
+		mcp.WithNumber("disk_gb", mcp.Description("Disk size in GB (default 20)")),
+		mcp.WithString("storage", mcp.Description("Storage backend (default: local-lvm)")),
+	), handlePVECreateVM)
+	registerTool(s, toolWithArgs("pve_start_vm", "Start a VM on Proxmox VE.",
+		mcp.WithNumber("vmid", mcp.Required()),
+		mcp.WithString("node", mcp.Description("Node name")),
+	), handlePVEStartVM)
+	registerTool(s, toolWithArgs("pve_stop_vm", "Force-stop a VM on Proxmox VE.",
+		mcp.WithNumber("vmid", mcp.Required()),
+		mcp.WithString("node", mcp.Description("Node name")),
+	), handlePVEStopVM)
+	registerTool(s, toolWithArgs("pve_delete_vm", "Delete a VM on Proxmox VE (must be stopped first).",
+		mcp.WithNumber("vmid", mcp.Required()),
+		mcp.WithString("node", mcp.Description("Node name")),
+	), handlePVEDeleteVM)
+	registerTool(s, toolWithArgs("pve_migrate_vm", "Migrate a VM to another node in the Proxmox cluster.",
+		mcp.WithNumber("vmid", mcp.Required()),
+		mcp.WithString("node", mcp.Required(), mcp.Description("Source node")),
+		mcp.WithString("target_node", mcp.Required(), mcp.Description("Target node")),
+		mcp.WithBoolean("online", mcp.Description("Live migration (keep VM running)")),
+	), handlePVEMigrateVM)
+	registerTool(s, toolWithArgs("pve_list_snapshots", "List all snapshots for a VM on Proxmox VE.",
+		mcp.WithNumber("vmid", mcp.Required()),
+		mcp.WithString("node", mcp.Description("Node name")),
+	), handlePVEListSnapshots)
+	registerTool(s, toolWithArgs("pve_create_snapshot", "Create a snapshot of a VM on Proxmox VE.",
+		mcp.WithNumber("vmid", mcp.Required()),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Snapshot name")),
+		mcp.WithString("description", mcp.Description("Snapshot description")),
+		mcp.WithString("node", mcp.Description("Node name")),
+		mcp.WithBoolean("include_ram", mcp.Description("Include RAM state in snapshot")),
+	), handlePVECreateSnapshot)
+	registerTool(s, toolWithArgs("pve_restore_snapshot", "Restore a VM from a snapshot on Proxmox VE.",
+		mcp.WithNumber("vmid", mcp.Required()),
+		mcp.WithString("snapshot", mcp.Required(), mcp.Description("Snapshot name")),
+		mcp.WithString("node", mcp.Description("Node name")),
+	), handlePVERestoreSnapshot)
+	registerTool(s, toolWithArgs("pve_delete_snapshot", "Delete a VM snapshot on Proxmox VE.",
+		mcp.WithNumber("vmid", mcp.Required()),
+		mcp.WithString("snapshot", mcp.Required(), mcp.Description("Snapshot name")),
+		mcp.WithString("node", mcp.Description("Node name")),
+	), handlePVEDeleteSnapshot)
+	registerTool(s, tool("pve_list_storage", "List all storage backends on the Proxmox VE cluster."), handlePVEListStorage)
+	registerTool(s, tool("pve_list_nodes", "List all nodes in the Proxmox VE cluster."), handlePVEListNodes)
 }
