@@ -229,10 +229,18 @@ func handleNotifyChannelAdd(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		SMTPHost:   argString(args, "smtp_host"),
 		Enabled:    true,
 	}
+	// R9-MCP-09: Cap channel name length.
+	if len(ch.Name) > 64 {
+		return errResult("name must not exceed 64 characters"), nil
+	}
 	if err := notifyMgr.AddChannel(ch); err != nil {
 		return unwrapError(err), nil
 	}
-	return okResult(ch), nil
+	// R9-MCP-02: Redact secrets from response — never echo back bot_token or webhook_url
+	redacted := *ch
+	redacted.BotToken = "[redacted]"
+	redacted.WebhookURL = "[redacted]"
+	return okResult(redacted), nil
 }
 
 func handleNotifyChannelList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -258,13 +266,20 @@ func handleNotifySend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if channelID == "" {
 		return errResult("channel_id is required"), nil
 	}
+	// R9-MCP-09: Cap input lengths to prevent abuse of external notification services.
 	title := argString(args, "title")
 	if title == "" {
 		return errResult("title is required"), nil
 	}
+	if len(title) > 256 {
+		return errResult("title must not exceed 256 characters"), nil
+	}
 	body := argString(args, "body")
 	if body == "" {
 		return errResult("body is required"), nil
+	}
+	if len(body) > 4096 {
+		return errResult("body must not exceed 4096 characters"), nil
 	}
 	level := argString(args, "level")
 	if level == "" {

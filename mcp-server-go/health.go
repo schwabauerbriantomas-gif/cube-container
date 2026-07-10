@@ -182,9 +182,10 @@ func (hm *HealthManager) setHealthCheck(hc *HealthCheck) error {
 		if hc.Host == "" {
 			hc.Host = "localhost"
 		}
-		// SSRF prevention (H7): block cloud metadata and shell metachars
-		if isCloudMetadataHost(hc.Host) {
-			return fmt.Errorf("health probe host '%s' is a cloud metadata endpoint — blocked", hc.Host)
+		// R9-MCP-04: Use isPrivateHost() to block all internal/private ranges (RFC 1918,
+		// loopback, link-local, cloud metadata) — not just cloud metadata endpoints.
+		if isPrivateHost(hc.Host) {
+			return fmt.Errorf("health probe host '%s' is a private/internal address — blocked (SSRF prevention)", hc.Host)
 		}
 	}
 	if hc.Type == HealthTCP {
@@ -194,9 +195,9 @@ func (hm *HealthManager) setHealthCheck(hc *HealthCheck) error {
 		if hc.Host == "" {
 			hc.Host = "localhost"
 		}
-		// SSRF prevention (H7): block cloud metadata and shell metachars
-		if isCloudMetadataHost(hc.Host) {
-			return fmt.Errorf("health probe host '%s' is a cloud metadata endpoint — blocked", hc.Host)
+		// R9-MCP-04: Use isPrivateHost() to block all internal/private ranges
+		if isPrivateHost(hc.Host) {
+			return fmt.Errorf("health probe host '%s' is a private/internal address — blocked (SSRF prevention)", hc.Host)
 		}
 	}
 	if hc.Type == HealthExec && hc.ExecCommand == "" {

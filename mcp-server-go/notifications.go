@@ -169,9 +169,11 @@ func (nm *NotificationManager) ListChannels() []NotificationChannel {
 
 	result := make([]NotificationChannel, 0, len(nm.channels))
 	for _, ch := range nm.channels {
-		// Don't expose secrets in list
+		// Don't expose secrets in list — redact bot_token AND webhook_url.
+		// R9-MCP-10: Webhook URLs (Slack/Discord) contain auth tokens.
 		safe := *ch
 		safe.BotToken = ""
+		safe.WebhookURL = ""
 		result = append(result, safe)
 	}
 	return result

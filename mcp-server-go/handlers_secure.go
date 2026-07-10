@@ -67,7 +67,15 @@ func handleSecureSandboxExec(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	if command == "" {
 		return errResult("command is required"), nil
 	}
+	// R9-MCP-05: Explicit timeout validation at handler level (defense-in-depth).
+	// Cap at 300s, default to 30s for values < 1, matching handleExecInContainer.
 	timeout := argInt(args, "timeout_seconds", 30)
+	if timeout < 1 {
+		timeout = 30
+	}
+	if timeout > 300 {
+		return errResult("timeout_seconds must not exceed 300"), nil
+	}
 	data, err := secureSandboxMgr.Exec(sandboxID, command, timeout)
 	if err != nil {
 		return unwrapError(err), nil

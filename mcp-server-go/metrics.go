@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -184,7 +185,10 @@ func writeMetrics(w http.ResponseWriter, collector *MetricsCollector, client Con
 	fmt.Fprintf(w, "# HELP cube_mcp_tool_calls_total Total tool calls by tool name.\n")
 	fmt.Fprintf(w, "# TYPE cube_mcp_tool_calls_total counter\n")
 	for _, name := range sortedKeys(tools) {
-		fmt.Fprintf(w, "cube_mcp_tool_calls_total{tool_name=\"%s\"} %d\n", name, tools[name])
+		// R9-MCP-06: Sanitize tool names to prevent Prometheus label/metric injection.
+		// Escape backslash, quote, and newline — the characters Prometheus cares about.
+		safe := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace(name)
+		fmt.Fprintf(w, "cube_mcp_tool_calls_total{tool_name=\"%s\"} %d\n", safe, tools[name])
 	}
 	if len(tools) == 0 {
 		fmt.Fprintf(w, "cube_mcp_tool_calls_total{tool_name=\"\"} 0\n")
