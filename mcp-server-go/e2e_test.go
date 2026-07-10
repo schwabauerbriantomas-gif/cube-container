@@ -162,6 +162,7 @@ func TestE2E_AuthHTTP(t *testing.T) {
 	ks := &KeyStore{
 		keys:     make(map[string]*APIKey),
 		filePath: dir + "/keys.json",
+		totp:     newTOTPStore(),
 	}
 
 	// Generate keys for each role
@@ -262,6 +263,7 @@ func TestE2E_RateLimit(t *testing.T) {
 	ks := &KeyStore{
 		keys:     make(map[string]*APIKey),
 		filePath: dir + "/keys.json",
+		totp:     newTOTPStore(),
 	}
 	k, _ := ks.GenerateKey(RoleViewer, "rate-test")
 

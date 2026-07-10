@@ -144,10 +144,12 @@ jobs:
           #   G304: file path from variable (validated by our path validators)
           #   G306: WriteFile perms 0644 → wants 0600 (config, not secrets)
           #   G402: TLS config (fires on import guard `var _ = tls.Config{}`)
+          #   G505: crypto/sha1 blocklisted (required by RFC 6238 TOTP — all
+          #         authenticator apps use HMAC-SHA1; not used for password hashing)
           #   G110: decompression bomb (fixed — now uses io.LimitReader)
           #   G115: integer overflow (fixed — now masks to 12 bits + #nosec)
           #   G305: file traversal (validated by path.Clean + prefix check)
-          args: -no-fail -fmt sarif -out gosec-results.sarif -exclude-dir=Cubelet -exclude-dir=CubeMaster -exclude=G104,G101,G107,G108,G204,G301,G302,G304,G306,G402,G110,G115,G305 ./mcp-server-go/...
+          args: -no-fail -fmt sarif -out gosec-results.sarif -exclude-dir=Cubelet -exclude-dir=CubeMaster -exclude=G104,G101,G107,G108,G204,G301,G302,G304,G306,G402,G505,G110,G115,G305 ./mcp-server-go/...
 
       - name: Enforce gosec severity (fail on HIGH/CRITICAL)
         run: |
