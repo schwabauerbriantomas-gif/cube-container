@@ -592,16 +592,34 @@ func (bm *BackupManager) untarGz(src, dst string) (int, error) {
 		if !strings.HasPrefix(filepath.Clean(target)+string(filepath.Separator), filepath.Clean(dst)+string(filepath.Separator)) {
 			continue
 		}
+		// Security: sanitize header.Mode to prevent integer overflow (G115/CWE-190).
+		// header.Mode is int64; os.FileMode expects uint32. Mask to 12 bits
+		// (standard Unix permission bits: setuid|setgid|sticky|rwxrwxrwx)
+		// and cast through uint32 to make the conversion explicit and safe.
+		// The & 0o7777 mask guarantees the value fits in uint32 (max 4095).
+		mode := uint32(header.Mode & 0o7777) // #nosec G115 -- masked to 12 bits, max 4095, cannot overflow uint32
+
 		switch header.Typeflag {
 		case tar.TypeDir:
-			os.MkdirAll(target, os.FileMode(header.Mode))
+			os.MkdirAll(target, os.FileMode(mode))
 		case tar.TypeReg:
 			os.MkdirAll(filepath.Dir(target), 0755)
-			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(mode))
 			if err != nil {
 				continue
 			}
-			io.Copy(outFile, tr)
+			// Security: limit decompressed size to prevent zip/tar bombs (G110/CWE-409).
+			// Cap at 10 GB per file — well above any legitimate volume backup entry.
+			const maxDecompressedBytes = 10 * 1024 * 1024 * 1024
+			lr := &io.LimitedReader{R: tr, N: maxDecompressedBytes}
+			if _, err := io.Copy(outFile, lr); err != nil {
+				outFile.Close()
+				return fileCount, fmt.Errorf("failed to write %s: %w", target, err)
+			}
+			if lr.N == 0 {
+				outFile.Close()
+				return fileCount, fmt.Errorf("file %s exceeds max decompressed size (%d bytes)", target, maxDecompressedBytes)
+			}
 			outFile.Close()
 			fileCount++
 		}
