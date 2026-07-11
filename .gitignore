@@ -36,6 +36,9 @@ node_modules/
 
 # Compiled binaries (build artifacts)
 Cubelet/cubelet
+Cubelet/cubecli
+Cubelet/testarp
+Cubelet/testtap
 CubeMaster/cube-master
 **/bin/
 **/*.exe
