@@ -56,8 +56,12 @@ func NewProxmoxClient(host string, token string, insecureTLS bool, defaultNode s
 
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: insecureTLS, // #nosec G402 -- homelab option, documented
+			MinVersion:         tls.VersionTLS12, // N-03: pin TLS 1.2 minimum
+			InsecureSkipVerify: insecureTLS,      // #nosec G402 — homelab option, documented
 		},
+	}
+	if insecureTLS {
+		fmt.Fprintf(os.Stderr, "[cube-mcp] WARNING: Proxmox TLS verification disabled (CUBE_PROXMOX_INSECURE_TLS=true) — MITM risk\n")
 	}
 
 	return &ProxmoxClient{

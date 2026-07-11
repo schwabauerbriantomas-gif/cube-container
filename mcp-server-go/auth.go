@@ -315,10 +315,16 @@ func newKeyStore() *KeyStore {
 func (ks *KeyStore) load() {
 	data, err := os.ReadFile(ks.filePath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			// N-09: Don't silently swallow read errors.
+			fmt.Fprintf(os.Stderr, "[cube-mcp] WARNING: failed to read auth keys from %s: %v\n", ks.filePath, err)
+		}
 		return
 	}
 	var keys []*APIKey
 	if err := json.Unmarshal(data, &keys); err != nil {
+		// N-09: Log parse errors instead of silently degrading.
+		fmt.Fprintf(os.Stderr, "[cube-mcp] WARNING: failed to parse auth keys from %s: %v — starting with empty key store\n", ks.filePath, err)
 		return
 	}
 	ks.mu.Lock()
@@ -340,9 +346,20 @@ func (ks *KeyStore) saveLocked() {
 	for _, k := range ks.keys {
 		keys = append(keys, k)
 	}
-	data, _ := json.MarshalIndent(keys, "", "  ")
-	os.MkdirAll(filepath.Dir(ks.filePath), 0700)
-	os.WriteFile(ks.filePath, data, 0600)
+	data, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		// N-09: Log marshal errors instead of silently ignoring.
+		fmt.Fprintf(os.Stderr, "[cube-mcp] ERROR: failed to marshal auth keys: %v\n", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(ks.filePath), 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "[cube-mcp] ERROR: failed to create auth key directory: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(ks.filePath, data, 0600); err != nil {
+		// N-09: Log write errors — admin needs to know keys weren't persisted.
+		fmt.Fprintf(os.Stderr, "[cube-mcp] ERROR: failed to write auth keys to %s: %v\n", ks.filePath, err)
+	}
 }
 
 // hashSecret computes a SHA-256 hash of an API key secret for at-rest storage.

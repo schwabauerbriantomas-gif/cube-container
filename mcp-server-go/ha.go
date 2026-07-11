@@ -279,15 +279,19 @@ func (m *HAManager) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// Previously the endpoint was unauthenticated when the secret was missing,
 	// allowing anyone to spoof heartbeats and prevent/force failover.
 	if m.sharedSecret == "" {
+		// N-07: Log to audit trail even on rejection.
+		fmt.Fprintf(os.Stderr, "[ha] heartbeat rejected from %s: no HA secret configured\n", r.RemoteAddr)
 		http.Error(w, "HA heartbeat disabled — set CUBE_HA_SECRET to enable", http.StatusForbidden)
 		return
 	}
 	if hb.HMAC == "" {
+		fmt.Fprintf(os.Stderr, "[ha] heartbeat rejected from %s: missing HMAC (from_id=%s)\n", r.RemoteAddr, hb.FromID)
 		http.Error(w, "missing heartbeat HMAC", http.StatusUnauthorized)
 		return
 	}
 	expected := computeHeartbeatHMAC(m.sharedSecret, hb.FromID, hb.Timestamp)
 	if !hmac.Equal([]byte(hb.HMAC), []byte(expected)) {
+		fmt.Fprintf(os.Stderr, "[ha] heartbeat rejected from %s: invalid HMAC (from_id=%s)\n", r.RemoteAddr, hb.FromID)
 		http.Error(w, "invalid heartbeat HMAC", http.StatusUnauthorized)
 		return
 	}

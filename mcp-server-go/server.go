@@ -11,6 +11,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -233,6 +234,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[cube-mcp] listening on %s\n", addr)
 		fmt.Fprintf(os.Stderr, "[cube-mcp] endpoints: POST /mcp, GET /health, POST /auth/keys\n")
 
+		// N-04/N-05: Determine TLS mode early for security headers + TLS config.
+		certFile := os.Getenv("CUBE_TLS_CERT")
+		keyFile := os.Getenv("CUBE_TLS_KEY")
+		tlsEnabled := certFile != "" && keyFile != ""
+
 		// Listener with per-IP connection limit (B2).
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -243,18 +249,28 @@ func main() {
 
 		httpServer := &http.Server{
 			Addr:              addr,
-			Handler:           limitedMux,
+			Handler:           securityHeadersMiddleware(limitedMux, tlsEnabled),
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			WriteTimeout:      0, // SSE streams need no write timeout
 			IdleTimeout:       120 * time.Second,
 			MaxHeaderBytes:    1 << 20, // 1MB max headers
+			TLSConfig: &tls.Config{ // N-05: pin TLS 1.2+ and restrict cipher suites
+				MinVersion:               tls.VersionTLS12,
+				PreferServerCipherSuites: true,
+				CipherSuites: []uint16{
+					tls.TLS_AES_128_GCM_SHA256,
+					tls.TLS_AES_256_GCM_SHA384,
+					tls.TLS_CHACHA20_POLY1305_SHA256,
+					tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+					tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+					tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+				},
+			},
 		}
 
 		// TLS support (M5): if cert and key files are provided, use TLS directly.
-		certFile := os.Getenv("CUBE_TLS_CERT")
-		keyFile := os.Getenv("CUBE_TLS_KEY")
-		if certFile != "" && keyFile != "" {
+		if tlsEnabled {
 			fmt.Fprintf(os.Stderr, "[cube-mcp] TLS enabled: cert=%s key=%s\n", certFile, keyFile)
 			if err := httpServer.ServeTLS(ln, certFile, keyFile); err != nil {
 				fmt.Fprintf(os.Stderr, "[cube-mcp] error: %v\n", err)
@@ -308,4 +324,19 @@ func extractToolFromRequest(r *http.Request) string {
 // ---- Tool registration and handlers are in separate files ----
 // See: tools_registration.go, handlers_basic.go, handlers_phase2.go,
 //       handlers_secure.go, tools_helpers.go
+
+// securityHeadersMiddleware adds standard security response headers (N-04).
+// When tlsEnabled is true, HSTS is included.
+func securityHeadersMiddleware(next http.Handler, tlsEnabled bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Cache-Control", "no-store")
+		if tlsEnabled {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 

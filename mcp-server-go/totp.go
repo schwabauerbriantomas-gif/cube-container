@@ -47,13 +47,15 @@ var totpAlgorithm = sha1.New //nosec G505 -- required by RFC 6238, see import an
 // Secrets are stored in-memory only (never persisted to disk in plaintext).
 // The enrollment state (enabled/disabled) IS persisted via the KeyStore.
 type TOTPStore struct {
-	mu      sync.RWMutex
-	secrets map[string][]byte // keyID → TOTP secret
+	mu          sync.RWMutex
+	secrets     map[string][]byte // keyID → TOTP secret
+	lastCounter map[string]int64  // keyID → last accepted TOTP counter (replay prevention, N-01)
 }
 
 func newTOTPStore() *TOTPStore {
 	return &TOTPStore{
-		secrets: make(map[string][]byte),
+		secrets:     make(map[string][]byte),
+		lastCounter: make(map[string]int64),
 	}
 }
 
@@ -87,6 +89,7 @@ func (ts *TOTPStore) Enroll(keyID, accountName string) (secret string, otpauthUR
 
 // Verify checks a TOTP code against the stored secret.
 // Allows ±totpSkew periods for clock drift.
+// N-01: Replay prevention — once a counter is accepted, it cannot be reused.
 func (ts *TOTPStore) Verify(keyID, code string) bool {
 	ts.mu.RLock()
 	secret, exists := ts.secrets[keyID]
@@ -110,6 +113,14 @@ func (ts *TOTPStore) Verify(keyID, code string) bool {
 		counter := (now / int64(totpPeriod)) + skew
 		expected := generateTOTP(secret, counter)
 		if hmac.Equal([]byte(fmt.Sprintf("%06d", expected)), []byte(fmt.Sprintf("%06d", codeInt))) {
+			// N-01: Replay prevention — reject if this counter was already used.
+			ts.mu.Lock()
+			if counter <= ts.lastCounter[keyID] {
+				ts.mu.Unlock()
+				return false
+			}
+			ts.lastCounter[keyID] = counter
+			ts.mu.Unlock()
 			return true
 		}
 	}
@@ -120,6 +131,7 @@ func (ts *TOTPStore) Verify(keyID, code string) bool {
 func (ts *TOTPStore) Remove(keyID string) {
 	ts.mu.Lock()
 	delete(ts.secrets, keyID)
+	delete(ts.lastCounter, keyID)
 	ts.mu.Unlock()
 }
 

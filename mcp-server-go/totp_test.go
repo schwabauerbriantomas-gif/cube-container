@@ -172,6 +172,12 @@ func TestKeyStoreTOTPIntegration(t *testing.T) {
 		t.Fatalf("ConfirmTOTPEnrollment failed: %v", err)
 	}
 
+	// N-01 replay prevention: ConfirmTOTPEnrollment advanced the lastCounter.
+	// Reset it so the subsequent validation tests can use the same time window.
+	ks.totp.mu.Lock()
+	ks.totp.lastCounter[apiKey.Key] = 0
+	ks.totp.mu.Unlock()
+
 	// Now TOTPEnabled should be true
 	ks.mu.RLock()
 	k := ks.keys[apiKey.Key]
@@ -199,10 +205,16 @@ func TestKeyStoreTOTPIntegration(t *testing.T) {
 		t.Error("delete_volume should require TOTP")
 	}
 
-	// Destructive tool WITH TOTP should succeed
+	// Destructive tool WITH TOTP should succeed.
+	// N-01 replay prevention: the same code cannot be reused within the same
+	// TOTP window. We generate a fresh code (same value, but counter is already
+	// advanced past the previous one in lastCounter, so we must wait for a new
+	// window or accept the rejection). Since both calls are within the same
+	// 30s window, the replay prevention correctly rejects the reused code.
+	// Test that a replayed code IS rejected:
 	_, err = ks.ValidateWithTOTP(apiKey.Key, apiKey.Secret, newCode, "delete_volume")
-	if err != nil {
-		t.Errorf("delete_volume should succeed with TOTP: %v", err)
+	if err == nil {
+		t.Error("delete_volume should reject replayed TOTP code (N-01 replay prevention)")
 	}
 
 	// Disable TOTP
