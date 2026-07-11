@@ -52,3 +52,4 @@ CubeMaster/cube-master
 coverage.out
 coverage.profile
 *.prof
+web/tsconfig.tsbuildinfo
