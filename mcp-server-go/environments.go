@@ -285,7 +285,10 @@ func (em *EnvironmentManager) Promote(sourceEnv, targetEnv, containerID string) 
 		return nil, fmt.Errorf("failed to create template for promotion: %w", err)
 	}
 	templateMap, _ := templateResp.(map[string]interface{})
-	templateID, _ := templateMap["id"].(string)
+	templateID, _ := templateMap["templateID"].(string)
+	if templateID == "" {
+		templateID, _ = templateMap["id"].(string)
+	}
 
 	// Create container with environment label
 	newResp, err := client.CreateSandbox(templateID, 512, 1.0, nil, map[string]interface{}{
@@ -296,7 +299,10 @@ func (em *EnvironmentManager) Promote(sourceEnv, targetEnv, containerID string) 
 		return nil, fmt.Errorf("failed to create container in target env: %w", err)
 	}
 	newContainer, _ := newResp.(map[string]interface{})
-	newContainerID, _ := newContainer["id"].(string)
+	newContainerID, _ := newContainer["sandboxID"].(string)
+	if newContainerID == "" {
+		newContainerID, _ = newContainer["id"].(string)
+	}
 
 	// Add to target, remove from source
 	target.Containers = append(target.Containers, newContainerID)

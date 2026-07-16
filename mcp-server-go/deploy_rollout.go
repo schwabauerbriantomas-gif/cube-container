@@ -267,7 +267,10 @@ func (rm *RolloutManager) createReplacement(ctx context.Context, svc *Service, n
 	if !ok {
 		return "", fmt.Errorf("unexpected template creation response")
 	}
-	tID, _ := templateID["id"].(string)
+	tID, _ := templateID["templateID"].(string)
+	if tID == "" {
+		tID, _ = templateID["id"].(string)
+	}
 	if tID == "" {
 		return "", fmt.Errorf("template creation did not return an ID")
 	}
@@ -284,7 +287,10 @@ func (rm *RolloutManager) createReplacement(ctx context.Context, svc *Service, n
 	if !ok {
 		return "", fmt.Errorf("unexpected container creation response")
 	}
-	cID, _ := container["id"].(string)
+	cID, _ := container["sandboxID"].(string)
+	if cID == "" {
+		cID, _ = container["id"].(string)
+	}
 	if cID == "" {
 		return "", fmt.Errorf("container creation did not return an ID")
 	}
