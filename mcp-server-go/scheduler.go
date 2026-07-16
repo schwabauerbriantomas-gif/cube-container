@@ -84,13 +84,27 @@ func suggestNode(requiredMemMB int, requiredCPU float64) ([]NodeScore, error) {
 //
 // Returns (NodeScore, true) if the node passes filters, or (zero, false) if excluded.
 func scoreNode(node map[string]interface{}, requiredMemMB int, requiredCPU float64) (NodeScore, bool) {
-	nodeID := nodeStr(node, "id")
+	// Support both Docker backend field names (ncpu, memoryBytes) and
+	// Cube backend field names (cpu_count, memory_mb).
+	nodeID := firstNonEmpty(nodeStr(node, "nodeID"), nodeStr(node, "id"), nodeStr(node, "hostname"))
 
-	totalCPU := nodeFloat(node, "cpu_count")
-	totalMem := nodeFloat(node, "memory_mb")
+	totalCPU := nodeFloat(node, "ncpu")
+	if totalCPU == 0 {
+		totalCPU = nodeFloat(node, "cpu_count")
+	}
+
+	totalMemBytes := nodeFloat(node, "memoryBytes")
+	if totalMemBytes == 0 {
+		totalMemBytes = nodeFloat(node, "memory_mb") * 1024 * 1024
+	}
+	// Convert bytes to MB for internal calculations
+	totalMem := totalMemBytes / (1024 * 1024)
+
+	// Docker doesn't expose per-container memory usage in /info, so
+	// we approximate from running container count and available memory.
+	running := nodeInt(node, "containers")
 	usedMem := nodeFloat(node, "used_memory_mb")
 	cpuUsagePct := nodeFloat(node, "cpu_usage_percent")
-	running := nodeInt(node, "running_containers")
 
 	// Derive available resources
 	availableMem := totalMem - usedMem
@@ -221,6 +235,16 @@ func nodeInt(m map[string]interface{}, key string) int {
 func nodeStr(m map[string]interface{}, key string) string {
 	if v, ok := m[key]; ok && v != nil {
 		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}
+
+// firstNonEmpty returns the first non-empty string from variadic args.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
 	}
 	return ""
 }

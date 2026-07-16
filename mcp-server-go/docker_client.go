@@ -218,11 +218,33 @@ func asMap(v interface{}) map[string]interface{} {
 	return map[string]interface{}{}
 }
 
+// mapGet retrieves a nested sub-map. If the value is not a map, returns empty.
 func mapGet(m map[string]interface{}, key string) map[string]interface{} {
 	if sub, ok := m[key].(map[string]interface{}); ok {
 		return sub
 	}
 	return map[string]interface{}{}
+}
+
+// mapGetAny retrieves a raw value from a map. Unlike mapGet (which only
+// returns sub-maps), this works for scalar values like strings, numbers,
+// and bools that Docker's /info and /version endpoints return.
+// This fixes the bug where mapGet(m, "Name") returned {} instead of "debian3".
+func mapGetAny(m map[string]interface{}, key string) interface{} {
+	if v, ok := m[key]; ok {
+		return v
+	}
+	return nil
+}
+
+// mapGetStr retrieves a string value from a map, with "" fallback.
+func mapGetStr(m map[string]interface{}, key string) string {
+	return toString(mapGetAny(m, key))
+}
+
+// mapGetInt retrieves an int value from a map, with 0 fallback.
+func mapGetInt(m map[string]interface{}, key string) int {
+	return toInt(mapGetAny(m, key))
 }
 
 func toString(v interface{}) string {
@@ -257,9 +279,9 @@ func (c *DockerClient) Health() (interface{}, error) {
 	return map[string]interface{}{
 		"status":     "healthy",
 		"backend":    "docker",
-		"containers": mapGet(m, "Containers"),
-		"images":     mapGet(m, "Images"),
-		"name":       mapGet(m, "Name"),
+		"containers": mapGetInt(m, "Containers"),
+		"images":     mapGetInt(m, "Images"),
+		"name":       mapGetStr(m, "Name"),
 	}, nil
 }
 
@@ -273,20 +295,20 @@ func (c *DockerClient) ClusterOverview() (interface{}, error) {
 	}
 	m := asMap(info)
 	return map[string]interface{}{
-		"nodes":             1,
-		"nodesReady":        1,
-		"sandboxes":         toInt(mapGet(m, "Containers")),
-		"sandboxesRunning":  toInt(mapGet(m, "ContainersRunning")),
-		"sandboxesPaused":   toInt(mapGet(m, "ContainersPaused")),
-		"sandboxesStopped":  toInt(mapGet(m, "ContainersStopped")),
-		"templates":         toInt(mapGet(m, "Images")),
-		"backend":           "docker",
-		"hostname":          mapGet(m, "Name"),
-		"os":                mapGet(m, "OperatingSystem"),
-		"arch":              mapGet(m, "Architecture"),
-		"ncpu":              mapGet(m, "NCPU"),
-		"memTotal":          mapGet(m, "MemTotal"),
-		"serverVersion":     mapGet(m, "ServerVersion"),
+		"nodes":            1,
+		"nodesReady":       1,
+		"sandboxes":        mapGetInt(m, "Containers"),
+		"sandboxesRunning": mapGetInt(m, "ContainersRunning"),
+		"sandboxesPaused":  mapGetInt(m, "ContainersPaused"),
+		"sandboxesStopped": mapGetInt(m, "ContainersStopped"),
+		"templates":        mapGetInt(m, "Images"),
+		"backend":          "docker",
+		"hostname":         mapGetStr(m, "Name"),
+		"os":               mapGetStr(m, "OperatingSystem"),
+		"arch":             mapGetStr(m, "Architecture"),
+		"ncpu":             mapGetInt(m, "NCPU"),
+		"memTotal":         mapGetInt(m, "MemTotal"),
+		"serverVersion":    mapGetStr(m, "ServerVersion"),
 	}, nil
 }
 
@@ -300,15 +322,15 @@ func (c *DockerClient) ClusterVersions() (interface{}, error) {
 	}
 	m := asMap(ver)
 	return map[string]interface{}{
-		"backend":      "docker",
-		"version":      mapGet(m, "Version"),
-		"apiVersion":   mapGet(m, "ApiVersion"),
-		"minAPIVersion": mapGet(m, "MinAPIVersion"),
-		"gitCommit":    mapGet(m, "GitCommit"),
-		"goVersion":    mapGet(m, "GoVersion"),
-		"os":           mapGet(m, "Os"),
-		"arch":         mapGet(m, "Arch"),
-		"buildTime":    mapGet(m, "BuildTime"),
+		"backend":       "docker",
+		"version":       mapGetStr(m, "Version"),
+		"apiVersion":    mapGetStr(m, "ApiVersion"),
+		"minAPIVersion": mapGetStr(m, "MinAPIVersion"),
+		"gitCommit":     mapGetStr(m, "GitCommit"),
+		"goVersion":     mapGetStr(m, "GoVersion"),
+		"os":            mapGetStr(m, "Os"),
+		"arch":          mapGetStr(m, "Arch"),
+		"buildTime":     mapGetStr(m, "BuildTime"),
 	}, nil
 }
 
@@ -321,20 +343,20 @@ func (c *DockerClient) nodeFromInfo() (interface{}, error) {
 		return nil, err
 	}
 	m := asMap(info)
-	name := toString(mapGet(m, "Name"))
+	name := mapGetStr(m, "Name")
 	return map[string]interface{}{
-		"nodeID":       name,
-		"hostname":     name,
-		"role":         "self",
-		"state":        "ready",
-		"availability": "active",
-		"address":      "",
-		"engineVersion": toString(mapGet(m, "ServerVersion")),
-		"os":           toString(mapGet(m, "OperatingSystem")),
-		"arch":         toString(mapGet(m, "Architecture")),
-		"ncpu":         toInt(mapGet(m, "NCPU")),
-		"memoryBytes":  toInt(mapGet(m, "MemTotal")),
-		"containers":   toInt(mapGet(m, "Containers")),
+		"nodeID":        name,
+		"hostname":      name,
+		"role":          "self",
+		"state":         "ready",
+		"availability":  "active",
+		"address":       "",
+		"engineVersion": mapGetStr(m, "ServerVersion"),
+		"os":            mapGetStr(m, "OperatingSystem"),
+		"arch":          mapGetStr(m, "Architecture"),
+		"ncpu":          mapGetInt(m, "NCPU"),
+		"memoryBytes":   mapGetInt(m, "MemTotal"),
+		"containers":    mapGetInt(m, "Containers"),
 	}, nil
 }
 
