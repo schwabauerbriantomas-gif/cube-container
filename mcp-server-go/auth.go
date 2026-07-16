@@ -825,13 +825,22 @@ func (am *AuthMiddleware) Wrap(next http.Handler, toolExtractor func(*http.Reque
 			am.logAudit(start, key, string(apiKey.Role), r, statusCode, allowed, reason, "")
 			return
 		}
-		if toolName != "" && !canExecute(apiKey.Role, toolName) {
-			statusCode = 403
-			allowed = false
-			reason = fmt.Sprintf("role '%s' cannot execute '%s' (requires %s)", apiKey.Role, toolName, toolPermissions[toolName])
-			writeJSONError(w, statusCode, reason)
-			am.logAudit(start, key, string(apiKey.Role), r, statusCode, allowed, reason, toolName)
-			return
+		if toolName != "" {
+			required, known := toolPermissions[toolName]
+			if !known {
+				statusCode = 403
+				allowed = false
+				reason = fmt.Sprintf("role '%s' cannot execute '%s' (tool not registered in RBAC permissions)", apiKey.Role, toolName)
+			} else if !canExecute(apiKey.Role, toolName) {
+				statusCode = 403
+				allowed = false
+				reason = fmt.Sprintf("role '%s' cannot execute '%s' (requires %s)", apiKey.Role, toolName, required)
+			}
+			if statusCode == 403 {
+				writeJSONError(w, statusCode, reason)
+				am.logAudit(start, key, string(apiKey.Role), r, statusCode, allowed, reason, toolName)
+				return
+			}
 		}
 
 		// Wrap the ResponseWriter to capture status code
