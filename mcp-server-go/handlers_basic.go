@@ -22,8 +22,10 @@ func handleBackendInfo(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolR
 			"images", "rolling_deploy", "log_aggregation", "audit_trail",
 			"environments", "notifications", "auth_tokens", "scheduled_jobs",
 			"metrics_query", "database_provisioning", "certificates", "events",
+			"systemd_services", "firewall_nftables", "kernel_sysctl",
+			"package_management", "file_operations", "wireguard", "bare_metal",
 		},
-		"tool_count": 161,
+		"tool_count": 178,
 	}
 	return okResult(info), nil
 }

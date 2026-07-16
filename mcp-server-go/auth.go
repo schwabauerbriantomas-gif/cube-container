@@ -251,6 +251,28 @@ var toolPermissions = map[string]Role{
 	"pve_delete_snapshot":  RoleAdmin,
 	"pve_list_storage":     RoleViewer,
 	"pve_list_nodes":       RoleViewer,
+
+	// --- Bare-metal system tools ---
+	// Read-only — viewer
+	"node_info":           RoleViewer,
+	"service_status":      RoleViewer,
+	"firewall_list":       RoleViewer,
+	"sysctl_get":          RoleViewer,
+	"wireguard_status":    RoleViewer,
+	"network_interfaces":  RoleViewer,
+	"file_read":           RoleViewer,
+	// Mutating — operator
+	"service_restart":     RoleOperator,
+	"service_start":       RoleOperator,
+	"service_stop":        RoleOperator,
+	"package_install":     RoleOperator,
+	"package_update":      RoleOperator,
+	"file_write":          RoleOperator,
+	"firewall_add_rule":   RoleOperator,
+	"exec_on_node":        RoleOperator,
+	// Destructive — admin
+	"firewall_delete_rule": RoleAdmin,
+	"sysctl_set":           RoleAdmin,
 }
 
 // roleLevel returns a numeric level for comparison (higher = more permissions).

@@ -720,4 +720,7 @@ func registerAllTools(s *server.MCPServer) {
 	), handlePVEDeleteSnapshot)
 	registerTool(s, tool("pve_list_storage", "List all storage backends on the Proxmox VE cluster."), handlePVEListStorage)
 	registerTool(s, tool("pve_list_nodes", "List all nodes in the Proxmox VE cluster."), handlePVEListNodes)
+
+	// --- Bare-metal system tools (17) ---
+	registerMetalTools(s)
 }
