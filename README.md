@@ -25,11 +25,30 @@ User → HTTPS → Caddy (TLS+WAF+Rate Limit) → MCP HTTP :8080
 
 ## Quick Start
 
-### Personal (stdio)
+### Pre-compiled Binary (no Go needed)
 
 ```bash
-go build -o mcp-server-go ./mcp-server-go
-./mcp-server-go --mode stdio
+# Download latest release
+wget https://github.com/schwabauerbriantomas-gif/orchestrator-cube-container/releases/latest/download/cube-mcp-linux-amd64
+chmod +x cube-mcp-linux-amd64
+
+# Personal (stdio)
+./cube-mcp-linux-amd64 --mode stdio
+
+# Production (HTTP + auth)
+./cube-mcp-linux-amd64 --gen-key admin --label "production"
+./cube-mcp-linux-amd64 --mode http --port 8080
+```
+
+Pre-compiled binaries are statically linked — work on any Linux x86_64 or ARM64 without dependencies. Checksums (SHA256) are provided with each release.
+
+### From Source (requires Go 1.25+)
+
+```bash
+git clone https://github.com/schwabauerbriantomas-gif/orchestrator-cube-container.git
+cd orchestrator-cube-container
+go build -o cube-mcp ./mcp-server-go
+./cube-mcp --mode stdio
 ```
 
 Connect from any MCP-compatible AI client (Claude Desktop, etc.).
@@ -402,6 +421,67 @@ REST API client for Proxmox VE. API token auth, TLS on by default, RBAC viewer/o
 | `pve_list_nodes` | List cluster nodes with status | viewer |
 | `pve_list_lxc` | List LXC containers | viewer |
 
+### Bare-Metal System Tools (17) — manage without SSH
+
+These tools extend the MCP server beyond container orchestration to full bare-metal management. Enable managing a cluster from a phone via API — no SSH access required.
+
+**systemd Services (4)**
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `service_status` | List running services or get status of a specific one | viewer |
+| `service_restart` | Restart a systemd service | operator |
+| `service_start` | Start a service | operator |
+| `service_stop` | Stop a service | operator |
+
+**Firewall / nftables (3)**
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `firewall_list` | List all active firewall rules | viewer |
+| `firewall_add_rule` | Add drop/accept rule (port, protocol, interface) | operator |
+| `firewall_delete_rule` | Delete rule by handle number | admin |
+
+**Kernel sysctl (2)**
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `sysctl_get` | Read a kernel parameter | viewer |
+| `sysctl_set` | Set a kernel parameter at runtime | admin |
+
+**System Info (1)**
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `node_info` | CPU, RAM, disk, uptime, load average, kernel | viewer |
+
+**Package Management (2)**
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `package_install` | Install a package via apt-get | operator |
+| `package_update` | Run apt-get update + upgrade | operator |
+
+**File Operations (2) — sensitive paths protected**
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `file_read` | Read file (blocks secrets: totp, keys, .env, shadow) | viewer |
+| `file_write` | Write file (blocks sensitive paths) | operator |
+
+**Network (2)**
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `wireguard_status` | WireGuard VPN status (peers, handshakes, transfers) | viewer |
+| `network_interfaces` | All interfaces with IP addresses | viewer |
+
+**Multi-Node (1)**
+
+| Tool | Description | Role |
+|------|-------------|------|
+| `exec_on_node` | Execute command on another cluster node via SSH | operator |
+
 ## Security
 
 ### Audit History
@@ -606,6 +686,8 @@ mcp-server-go/
 ├── hypervisor_gpu.go    — GPU passthrough (NVIDIA/AMD/Intel, 4 tools)
 ├── hypervisor_cloudinit.go — Cloud-init & template management (3 tools)
 ├── hypervisor_validate.go — 15 validators for hypervisor inputs
+├── metal_tools.go         — Bare-metal system tools: systemd, firewall, sysctl, packages, files, WireGuard (17 tools)
+├── metal_tools_registration.go — Registration + RBAC for metal tools
 ├── scheduler.go         — Bin-packing node scheduler
 ├── rollback.go          — Deployment versioning + rollback
 ├── logstream.go         — SSE log streaming endpoint
@@ -673,9 +755,12 @@ The `skills/` directory contains playbooks that teach the AI model how to chain 
 - [ ] Real-time event streaming via SSE
 - [ ] Log timestamp extraction from known formats (RFC3339, syslog)
 - [ ] Email channel implementation (SMTP relay)
+- [x] ~~Bare-metal system tools (systemd, firewall, sysctl, packages, files, WireGuard)~~ — 17 tools added in v0.11.0-beta
+- [x] ~~Pre-compiled release binaries~~ — GitHub Actions auto-builds AMD64 + ARM64 on tag push
 - [x] ~~Job tool execution~~ (job executor now runs real tools via handler registry)
 - [ ] Tests for Phase 2 features (images, rollout, logs, envs, jobs, DBs, certs, events)
 - [ ] Unit tests for AS-1 through AS-7 fixes
+- [ ] Unit tests for bare-metal tools (metal_tools_test.go)
 
 ## License
 
