@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -368,20 +367,18 @@ func (nm *NetworkManager) removeNetworkPolicyFile(np *NetworkPolicy) {
 // ---- System integration ----
 
 func (nm *NetworkManager) applyPortMapping(pm *PortMapping) {
-	// Use iptables to forward host port to container
-	// This is a simplified version — real implementation needs container IP
-	cmd := exec.Command("iptables", "-t", "nat", "-A", "PREROUTING",
-		"-p", pm.Protocol,
-		"--dport", fmt.Sprintf("%d", pm.HostPort),
-		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", pm.HostIP, pm.ContainerPort))
-	cmd.Run()
+	// Use iptables to forward host port to container.
+	// The DNAT destination must be the container's IP, not HostIP (which is
+	// the listen address, typically 0.0.0.0). Since we don't have the
+	// container IP in the PortMapping struct, we skip iptables for now
+	// and rely on Docker's own port publishing (-p) instead.
+	// TODO: resolve container IP via docker inspect and apply DNAT correctly.
+	fmt.Fprintf(os.Stderr, "[cube-mcp] port mapping %s: iptables DNAT skipped (container IP resolution not implemented); use Docker -p port publishing instead\n", pm.ID)
 }
 
 func (nm *NetworkManager) removePortMappingIptables(pm *PortMapping) {
-	exec.Command("iptables", "-t", "nat", "-D", "PREROUTING",
-		"-p", pm.Protocol,
-		"--dport", fmt.Sprintf("%d", pm.HostPort),
-		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", pm.HostIP, pm.ContainerPort)).Run()
+	// No-op: since applyPortMapping doesn't add iptables rules, there's
+	// nothing to remove. Kept for API compatibility.
 }
 
 func (nm *NetworkManager) addToHosts(alias, target string) {

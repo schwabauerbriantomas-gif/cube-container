@@ -211,6 +211,10 @@ func (g *GarbageCollector) DiskUsage() ([]DiskUsageEntry, error) {
 
 	// Parse the table output (docker system df doesn't have clean JSON format)
 	// Format: TYPE | TOTAL | ACTIVE | SIZE | RECLAIMABLE
+	// Problem: TYPE can contain spaces ("Local Volumes", "Build Cache") and
+	// RECLAIMABLE can contain spaces ("236.6MB (57%)"). We handle this by
+	// parsing from the right: the last 4 fields are TOTAL, ACTIVE, SIZE,
+	// RECLAIMABLE, and everything before is TYPE.
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var entries []DiskUsageEntry
 
@@ -219,16 +223,49 @@ func (g *GarbageCollector) DiskUsage() ([]DiskUsageEntry, error) {
 			continue // header
 		}
 		fields := strings.Fields(line)
+		// Expected formats (after strings.Fields):
+		//   5 fields: TYPE TOTAL ACTIVE SIZE RECLAIMABLE
+		//   6 fields: TYPE TOTAL ACTIVE SIZE RECLAIMABLE (X%)
+		//   6 fields: WORD WORD TOTAL ACTIVE SIZE RECLAIMABLE  (e.g. "Build Cache")
+		// Distinguish by checking if the last field starts with "("
 		if len(fields) < 5 {
 			continue
 		}
-		entry := DiskUsageEntry{
-			Type:        fields[0],
-			Size:        fields[3],
-			Reclaimable: fields[4],
+		n := len(fields)
+		var entry DiskUsageEntry
+		entry.Size = fields[n-2] // SIZE is always second-to-last or third-to-last
+		entry.Reclaimable = fields[n-1]
+
+		if n == 5 {
+			// TYPE TOTAL ACTIVE SIZE RECLAIMABLE
+			entry.Type = fields[0]
+			fmt.Sscanf(fields[1], "%d", &entry.Total)
+			fmt.Sscanf(fields[2], "%d", &entry.Active)
+		} else if n == 6 && strings.HasPrefix(fields[n-1], "(") {
+			// TYPE TOTAL ACTIVE SIZE RECLAIMABLE (X%)
+			entry.Type = fields[0]
+			entry.Size = fields[n-3]
+			entry.Reclaimable = fields[n-2] + " " + fields[n-1]
+			fmt.Sscanf(fields[1], "%d", &entry.Total)
+			fmt.Sscanf(fields[2], "%d", &entry.Active)
+		} else if n == 6 {
+			// WORD WORD TOTAL ACTIVE SIZE RECLAIMABLE (e.g. "Local Volumes")
+			entry.Type = fields[0] + " " + fields[1]
+			fmt.Sscanf(fields[2], "%d", &entry.Total)
+			fmt.Sscanf(fields[3], "%d", &entry.Active)
+		} else if n == 7 && strings.HasPrefix(fields[n-1], "(") {
+			// WORD WORD TOTAL ACTIVE SIZE RECLAIMABLE (X%) (e.g. "Local Volumes")
+			entry.Type = fields[0] + " " + fields[1]
+			entry.Size = fields[n-3]
+			entry.Reclaimable = fields[n-2] + " " + fields[n-1]
+			fmt.Sscanf(fields[2], "%d", &entry.Total)
+			fmt.Sscanf(fields[3], "%d", &entry.Active)
+		} else {
+			// Fallback: best effort
+			entry.Type = strings.Join(fields[:n-4], " ")
+			fmt.Sscanf(fields[n-4], "%d", &entry.Total)
+			fmt.Sscanf(fields[n-3], "%d", &entry.Active)
 		}
-		fmt.Sscanf(fields[1], "%d", &entry.Total)
-		fmt.Sscanf(fields[2], "%d", &entry.Active)
 		entries = append(entries, entry)
 	}
 
