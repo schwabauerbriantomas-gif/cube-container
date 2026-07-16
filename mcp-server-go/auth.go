@@ -130,7 +130,7 @@ var toolPermissions = map[string]Role{
 	// Secrets management — admin to mutate, operator to read, viewer to list
 	"secret_set":    RoleAdmin,
 	"secret_get":    RoleOperator,
-	"secret_list":   RoleViewer,
+	"secret_list":   RoleAdmin, // PENTEST FIX M2: was RoleViewer — secret names are metadata, restrict to admin
 	"secret_delete": RoleAdmin,
 	// Alerting — admin to create/remove, viewer to list, operator to test
 	"alert_rule_add":    RoleAdmin,
@@ -725,18 +725,20 @@ func VerifyAuditChain(path string) (int, error) {
 
 // AuthMiddleware wraps an http.Handler with API key auth, RBAC, rate limiting, audit.
 type AuthMiddleware struct {
-	keys       *KeyStore
-	limiter    *rateLimiter
-	ipLimiter  *rateLimiter // AUDIT FIX M-08: per-IP rate limit prevents multi-key bypass
-	audit      *AuditLogger
+	keys           *KeyStore
+	limiter        *rateLimiter
+	ipLimiter      *rateLimiter // AUDIT FIX M-08: per-IP rate limit prevents multi-key bypass
+	authFailLimit  *rateLimiter // PENTEST FIX M1: per-IP rate limit on auth failures
+	audit          *AuditLogger
 }
 
 func newAuthMiddleware(keys *KeyStore, limiter *rateLimiter, audit *AuditLogger) *AuthMiddleware {
 	return &AuthMiddleware{
-		keys:      keys,
-		limiter:   limiter,
-		ipLimiter: newRateLimiter(600, time.Minute), // AUDIT FIX M-08: 600 req/min per IP (10x per-key)
-		audit:     audit,
+		keys:          keys,
+		limiter:       limiter,
+		ipLimiter:     newRateLimiter(600, time.Minute),  // AUDIT FIX M-08: 600 req/min per IP (10x per-key)
+		authFailLimit: newRateLimiter(10, time.Minute),    // PENTEST FIX M1: 10 auth failures/min per IP
+		audit:         audit,
 	}
 }
 
@@ -785,6 +787,14 @@ func (am *AuthMiddleware) Wrap(next http.Handler, toolExtractor func(*http.Reque
 		// Authenticate with TOTP support
 		apiKey, err := am.keys.ValidateWithTOTP(key, secret, totpCode, toolName)
 		if err != nil {
+			// PENTEST FIX M1: rate limit auth failures per IP to prevent brute force
+			clientIP := ipFromAddr(r.RemoteAddr)
+			if !am.authFailLimit.Allow(clientIP) {
+				w.Header().Set("Retry-After", "60")
+				writeJSONError(w, 429, "too many authentication failures")
+				am.logAudit(start, key, "", r, 429, false, "auth fail rate limited", "")
+				return
+			}
 			statusCode = 401
 			allowed = false
 			reason = err.Error()

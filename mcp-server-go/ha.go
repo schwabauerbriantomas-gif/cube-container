@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -516,7 +517,18 @@ func (m *HAManager) dispatchHeartbeats() {
 	}
 
 	body, _ := json.Marshal(hb)
-	client := &http.Client{Timeout: m.heartbeatInterval}
+	client := &http.Client{
+		Timeout: m.heartbeatInterval,
+	}
+	// When TLS is enabled, accept the self-signed cert (homelab mode).
+	// In production, a CA-signed cert should be used and this skipped.
+	if os.Getenv("CUBE_TLS_CERT") != "" {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // #nosec G402 — homelab self-signed; production uses CA certs
+			},
+		}
+	}
 
 	healthy := make(map[string]bool, len(addresses))
 	var wg sync.WaitGroup
@@ -526,7 +538,11 @@ func (m *HAManager) dispatchHeartbeats() {
 		wg.Add(1)
 		go func(addr string) {
 			defer wg.Done()
-			url := fmt.Sprintf("http://%s/ha/heartbeat", addr)
+			scheme := "http"
+			if os.Getenv("CUBE_TLS_CERT") != "" {
+				scheme = "https"
+			}
+			url := fmt.Sprintf("%s://%s/ha/heartbeat", scheme, addr)
 			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 			if err != nil {
 				return
